@@ -46,6 +46,6 @@ jobs:
         with:
           tag_name: latest
           name: Latest build
-          body: 最新自動建置: Android APK 與 iPhone 橋接 EXE, 下載後照 SOP.md 使用。
+          body: '最新自動建置 Android APK 與 iPhone 橋接 EXE, 下載後照 SOP.md 使用。'
           files: clients/android-app/app/build/outputs/apk/debug/app-debug.apk
           fail_on_unmatched_files: true
