@@ -21,7 +21,9 @@ iOS 16 以下 dvt 會失敗, 自動改用舊版 `developer simulate-location set
   3. iPhone 用 USB 接電腦, 點「信任此電腦」, 開開發者模式:
      設定 > 隱私權與安全性 > 開發者模式 > 開啟, 重開機
   4. 雙擊 start.bat (或: python ios_bridge.py)
-  5. 到 http://localhost:3000, 選 ios-bridge-01 這台裝置, 瞬移 / 播路線
+  5. 到 http://localhost:3000, 選你的 iPhone 橋接 (裝置 ID 會自動用手機 UDID 前 8 碼,
+     例 ios-a1b2c3d4, 每支 iPhone 天生不一樣, 兩個人同時用也不會撞成同一台),
+     瞬移 / 播路線
 
 測試 (不連後端, 直接改一次定位, 按 Ctrl+C 停止並還原):
   python ios_bridge.py --test 25.0339 121.5645
@@ -30,7 +32,7 @@ iOS 16 以下 dvt 會失敗, 自動改用舊版 `developer simulate-location set
 
 環境變數:
   BACKEND_URL  後端位址, 預設 http://localhost:3000
-  DEVICE_ID    裝置 ID, 預設 ios-bridge-01
+  DEVICE_ID    裝置 ID, 沒設時自動用手機 UDID 前 8 碼 (例 ios-a1b2c3d4), 找不到手機才用 ios-bridge-01
   DEVICE_NAME  裝置名稱, 預設 iPhone 橋接
 """
 import argparse
@@ -47,6 +49,7 @@ if getattr(sys, "frozen", False) and "BACKEND_URL" not in os.environ:
 DEVICE_ID = os.environ.get("DEVICE_ID", "ios-bridge-01")
 DEVICE_NAME = os.environ.get("DEVICE_NAME", "iPhone 橋接")
 DEVICE_UDID = os.environ.get("DEVICE_UDID", "")
+DEVICE_ID_FROM_ENV = "DEVICE_ID" in os.environ  # 有手動設 DEVICE_ID 就用手動的, 不自動改
 
 
 def _pmd3_cmd():
@@ -87,6 +90,28 @@ def run(cmd, timeout=60):
         return False, "找不到 pymobiledevice3, 請先跑 install.bat"
     except subprocess.TimeoutExpired:
         return False, "指令逾時, 請檢查 iPhone 是否還連著 USB"
+
+
+_id_resolved = False
+
+
+def _ensure_device_id():
+    """決定裝置 ID: 沒手動設 DEVICE_ID 時, 用 iPhone 的 UDID 前 8 碼當 ID
+    (例 ios-a1b2c3d4), 每支 iPhone 天生不一樣, 兩個人同時用也不會撞成同一台。
+    順便把 UDID 記下來, 後面 dvt 指令直接指這支手機。
+    找不到手機時先用預設 ios-bridge-01 (接上手機後重開橋接, 就會自動用手機 ID)。"""
+    global DEVICE_ID, DEVICE_NAME, DEVICE_UDID, _id_resolved
+    if _id_resolved or DEVICE_ID_FROM_ENV:
+        return
+    _id_resolved = True
+    udid = _find_remote_udid()
+    if udid:
+        DEVICE_UDID = udid
+        DEVICE_ID = f"ios-{udid[:8].lower()}"
+        DEVICE_NAME = f"iPhone 橋接 ({udid[:8]})"
+        print(f"[橋接] 用這支 iPhone 的 ID: {DEVICE_ID}", flush=True)
+    else:
+        print("[橋接] 找不到 iPhone, 先用 ios-bridge-01 (接上手機後重開橋接, 就會自動用手機 ID)", flush=True)
 
 
 def list_devices():
@@ -239,6 +264,7 @@ def serve():
         if isinstance(data, dict) and data.get("deviceId") == DEVICE_ID:
             clear_location()
 
+    _ensure_device_id()  # 沒手動設 DEVICE_ID 時, 用手機 UDID 當裝置 ID
     print(f"[橋接] 啟動, 裝置 {DEVICE_ID} ({DEVICE_NAME}), 後端 {BACKEND_URL}")
     print("[橋接] 請確認 iPhone 已用 USB 接上並信任電腦, 然後到中控台選這台裝置")
     threading.Thread(target=_watch_sim, daemon=True).start()
@@ -268,6 +294,7 @@ def main():
     if args.clear:
         sys.exit(0 if clear_location() else 1)
     if args.test:
+        _ensure_device_id()  # 測試也用手機 UDID 當 ID, 指到同一支手機
         if not set_location(args.test[0], args.test[1]):
             sys.exit(1)
         print("[橋接] 現在打開 iPhone 地圖 App, 位置應該就是上面那組座標。", flush=True)
