@@ -37,6 +37,7 @@ import argparse
 import os
 import subprocess
 import sys
+import threading
 import time
 
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:3000")
@@ -112,6 +113,18 @@ def _stop_sim():
         run(_pmd3_cmd() + ["developer", "simulate-location", "clear"], timeout=30)
 
 
+def _drain_stream(stream, prefix):
+    """背景把子程序的 stderr 一行行印到橋接視窗, 這樣它真正的錯誤才看得到。
+    不這樣做: stderr 沒人讀, 寫滿緩衝區會卡住程序, 橋接還會誤判成功。"""
+    try:
+        for line in stream:
+            line = line.rstrip()
+            if line:
+                print(f"{prefix} {line}", flush=True)
+    except Exception:
+        pass
+
+
 def _start_dvt(lat, lng, grace=8):
     """背景啟動 dvt simulate-location set。
     幾秒內就自己結束 = 報錯 (回傳錯誤訊息); 還在跑 = 定位已寫入。"""
@@ -124,16 +137,28 @@ def _start_dvt(lat, lng, grace=8):
         return None, "找不到 pymobiledevice3, 請先跑 install.bat"
     except Exception as e:
         return None, str(e)
+    threading.Thread(target=_drain_stream, args=(proc.stderr, "[dvt]"), daemon=True).start()
     try:
         rc = proc.wait(timeout=grace)
-        err = ""
-        try:
-            err = (proc.stderr.read() or "").strip()
-        except Exception:
-            pass
-        return None, err or f"dvt simulate-location 結束, 結束碼 {rc}"
+        time.sleep(0.5)  # 等 drain thread 把最後的錯誤行印完
+        return None, f"dvt simulate-location 結束, 結束碼 {rc} (原因看上面 [dvt] 的行)"
     except subprocess.TimeoutExpired:
         return proc, None  # 還在跑, 就是成功
+
+
+_warned_proc = None
+
+
+def _watch_sim():
+    """背景監看模擬程序: 它中途結束 = 定位已還原, 馬上在視窗警告,
+    不然橋接會一直以為定位還在, 手機卻早已跳回真實位置。"""
+    global _warned_proc
+    while True:
+        time.sleep(5)
+        proc = _sim_proc
+        if proc is not None and proc.poll() is not None and proc is not _warned_proc:
+            _warned_proc = proc
+            print(f"[橋接] 注意: 模擬程序已結束 (結束碼 {proc.returncode}), iPhone 定位可能已還原, 請到中控台再瞬移一次", flush=True)
 
 
 def set_location(lat, lng):
@@ -216,6 +241,7 @@ def serve():
 
     print(f"[橋接] 啟動, 裝置 {DEVICE_ID} ({DEVICE_NAME}), 後端 {BACKEND_URL}")
     print("[橋接] 請確認 iPhone 已用 USB 接上並信任電腦, 然後到中控台選這台裝置")
+    threading.Thread(target=_watch_sim, daemon=True).start()
     try:
         while True:
             try:
