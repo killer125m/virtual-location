@@ -14,12 +14,12 @@
 
 **iPhone 一定要電腦當橋接:**
 第一次: 裝 iTunes, iPhone 用 USB 接電腦點信任, 開開發者模式並重開機,
-到 GitHub Actions 下載 `ios-bridge-exe`, 雙擊 `ios-bridge.exe` 就好,
+到 GitHub Releases 下載 `ios-bridge.exe`、`pymobiledevice3.exe`, 兩個放同一個資料夾, 雙擊 `ios-bridge.exe` 就好,
 不用裝 Python。第一次 USB 配對完, 之後同一 Wi-Fi 不插線也會試 Wi-Fi。
 黑視窗不要關, 關掉 iPhone 就收不到新位置了。
 
 **Android 裝 App 就能用:**
-到 GitHub Actions 下載 `virtual-location-apk` 裝到手機,
+到 GitHub Releases 下載 `app-debug.apk` 裝到手機,
 開開發人員選項 > 選取模擬位置應用程式 > 選「虛擬定位」,
 App 裡後端位址填 `https://virtual-location.onrender.com`, 按開始。
 
