@@ -125,6 +125,15 @@ app.post('/api/devices', (req, res) => {
   logEvent('device', `裝置註冊: ${d.name} (${type})`);
   res.status(201).json(publicDevice(d));
 });
+app.delete('/api/devices/:id', (req, res) => {
+  const d = devices.get(req.params.id);
+  if (!d) return res.status(404).json({ error: '裝置不存在' });
+  stopRoute(req.params.id);
+  devices.delete(req.params.id);
+  broadcastDevices();
+  logEvent('device', `裝置已移除: ${d.name} (${d.type})`);
+  res.json({ ok: true, id: req.params.id });
+});
 app.post('/api/devices/:id/location', (req, res) => {
   const { lat, lng, accuracy } = req.body || {};
   if (typeof lat !== 'number' || typeof lng !== 'number') return res.status(400).json({ error: '需要數字 lat / lng' });
