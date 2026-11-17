@@ -1,7 +1,9 @@
 package com.vl.mockloc
 
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -22,14 +24,11 @@ class BackendClient(private val baseUrl: String) {
 
     fun register(deviceId: String, name: String): Boolean {
         return try {
-            val body = okhttp3.RequestBody.create(
-                okhttp3.MediaType.parse("application/json"),
-                JSONObject().apply {
-                    put("id", deviceId)
-                    put("type", "android")
-                    put("name", name)
-                }.toString()
-            )
+            val body = JSONObject().apply {
+                put("id", deviceId)
+                put("type", "android")
+                put("name", name)
+            }.toString().toRequestBody("application/json".toMediaType())
             val req = Request.Builder().url(url("/api/devices")).post(body).build()
             client.newCall(req).execute().use { it.isSuccessful }
         } catch (_: Exception) {
@@ -43,7 +42,7 @@ class BackendClient(private val baseUrl: String) {
             val req = Request.Builder().url(url("/api/devices")).get().build()
             client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return null
-                val arr = org.json.JSONArray(resp.body()?.string() ?: return null)
+                val arr = org.json.JSONArray(resp.body?.string() ?: return null)
                 for (i in 0 until arr.length()) {
                     val d = arr.getJSONObject(i)
                     if (d.optString("id") != deviceId) continue
