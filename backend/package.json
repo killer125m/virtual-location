@@ -1,0 +1,1 @@
+{"dependencies":{"cors":"^2.8.5","express":"^4.21.2","socket.io":"^4.8.1"},"description":"跨平台虛擬定位系統原型：雲端中控後端 (Express + Socket.io + Geocoding)","main":"server.js","name":"virtual-location-backend","scripts":{"dev":"node --watch server.js","start":"node server.js"},"type":"commonjs","version":"0.1.0"}
