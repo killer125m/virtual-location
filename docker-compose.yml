@@ -1,0 +1,11 @@
+services:
+  virtual-location:
+    build: ./backend
+    container_name: virtual-location
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - GEOCODER=nominatim
+      # - GOOGLE_API_KEY=你的Key
