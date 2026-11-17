@@ -55,7 +55,7 @@ label{font-size:12px;color:#94a3b8}
     <h2>3 · 路線模擬</h2>
     <p class="hint">點「＋ 加入途經點」把目前座標加入路線，至少 2 點才能播放。後端每秒插值推播，Android / iOS / 網頁端會同步移動。</p>
     <div id="waypoints" class="meta">尚無途經點</div>
-    <button class="ghost" onclick="addWaypoint()">＋ 加入途經點</button>
+    <div class="row"><button class="ghost" onclick="addWaypoint()">＋ 加入途經點</button><button class="ghost" onclick="clearWaypoints()">🗑 清除路線</button></div>
     <label>速度 <span id="speedLabel">30</span> km/h</label>
     <input type="range" min="5" max="80" value="30" oninput="document.getElementById('speedLabel').textContent=this.value" id="speed">
     <div class="row"><button onclick="playRoute()">▶ 播放路線</button><button class="danger" onclick="stopRoute()">■ 停止</button></div>
@@ -144,8 +144,10 @@ async function addBookmark(){
   $('bmName').value=''; loadBookmarks();
 }
 function addWaypoint(){ waypoints.push({lat:+$('lat').value,lng:+$('lng').value}); renderWaypoints(); }
+async function deleteWaypoint(i){ await stopRoute(); waypoints.splice(i,1); renderWaypoints(); log('已刪除第 '+(i+1)+' 個途經點'); }
+async function clearWaypoints(){ await stopRoute(); waypoints=[]; renderWaypoints(); log('已清除整條路線'); }
 function renderWaypoints(){
-  $('waypoints').innerHTML = waypoints.map((w,i)=>`${i+1}. ${w.lat.toFixed(5)}, ${w.lng.toFixed(5)}`).join('<br>') || '尚無途經點';
+  $('waypoints').innerHTML = waypoints.map((w,i)=>`${i+1}. ${w.lat.toFixed(5)}, ${w.lng.toFixed(5)} <span style="float:right;cursor:pointer;color:#f87171" onclick="deleteWaypoint(${i})" title="刪除這個途經點">✕</span>`).join('<br>') || '尚無途經點';
   if(routeLine) map.removeLayer(routeLine);
   if(waypoints.length>1) routeLine=L.polyline(waypoints.map(w=>[w.lat,w.lng]),{color:'#38bdf8'}).addTo(map);
 }
@@ -155,7 +157,7 @@ async function playRoute(){
   for(const id of selected){ await fetch(`/api/devices/${id}/route`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({waypoints,speedKmh:speed})}); }
   log(`路線播放中，${waypoints.length} 點，${speed} km/h`);
 }
-async function stopRoute(){ for(const id of selected){ await fetch(`/api/devices/${id}/route/stop`,{method:'POST'}); } }
+async function stopRoute(){ for(const id of selected){ await fetch(`/api/devices/${id}/route/stop`,{method:'POST'}); } log('已停止路線'); }
 async function init(){
   const h=await (await fetch('/health')).json(); $('geoStatus').textContent='Geocoder: '+h.geocoder;
   // 預設三台模擬裝置，演示用
