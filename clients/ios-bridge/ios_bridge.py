@@ -40,8 +40,35 @@ import sys
 import time
 
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:3000")
+# 打包成 .exe 時預設連雲端, 不用再設 BACKEND_URL; 本機跑 .py 時預設還是 localhost
+if getattr(sys, "frozen", False) and "BACKEND_URL" not in os.environ:
+    BACKEND_URL = "https://virtual-location.onrender.com"
 DEVICE_ID = os.environ.get("DEVICE_ID", "ios-bridge-01")
 DEVICE_NAME = os.environ.get("DEVICE_NAME", "iPhone 橋接")
+DEVICE_UDID = os.environ.get("DEVICE_UDID", "")
+
+
+def _pmd3_cmd():
+    """pymobiledevice3 指令: 打包成 .exe 時用同目錄的 pymobiledevice3.exe,
+    沒打包時用 PATH 上的 pymobiledevice3。"""
+    if getattr(sys, "frozen", False):
+        bundled = os.path.join(os.path.dirname(sys.executable), "pymobiledevice3.exe")
+        if os.path.exists(bundled):
+            return [bundled]
+    return ["pymobiledevice3"]
+
+
+def _find_remote_udid():
+    """找 Wi-Fi 上的 iPhone: 第一次 USB 配對後, 同 Wi-Fi 下 remote list 會看到它。
+    回傳 UDID (40 碼 hex) 或空字串。"""
+    import re
+    for args in (["remote", "list"], ["usbmux", "list"]):
+        ok, out = run(_pmd3_cmd() + args, timeout=30)
+        if ok and out:
+            m = re.findall(r"\b[0-9a-fA-F]{40}\b", out)
+            if m:
+                return m[0]
+    return ""
 
 # 正在背景跑的 dvt simulate-location set 程序 (iOS 17+ 用)。定位要一直留著,
 # 這個程序就不能停; 換位置 / 還原時先砍掉它。
@@ -62,7 +89,7 @@ def run(cmd, timeout=60):
 
 
 def list_devices():
-    ok, out = run(["pymobiledevice3", "usbmux", "list"])
+    ok, out = run(_pmd3_cmd() + ["usbmux", "list"])
     print(out or "沒有看到裝置")
     return ok
 
@@ -82,7 +109,7 @@ def _stop_sim():
             except Exception:
                 pass
     if mode == "legacy":
-        run(["pymobiledevice3", "developer", "simulate-location", "clear"], timeout=30)
+        run(_pmd3_cmd() + ["developer", "simulate-location", "clear"], timeout=30)
 
 
 def _start_dvt(lat, lng, grace=8):
@@ -90,8 +117,7 @@ def _start_dvt(lat, lng, grace=8):
     幾秒內就自己結束 = 報錯 (回傳錯誤訊息); 還在跑 = 定位已寫入。"""
     try:
         proc = subprocess.Popen(
-            ["pymobiledevice3", "developer", "dvt", "simulate-location",
-             "set", "--", str(lat), str(lng)],
+            (_pmd3_cmd() + ["developer", "dvt", "simulate-location", "set"] + (["--udid", DEVICE_UDID] if DEVICE_UDID else []) + ["--", str(lat), str(lng)]),
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
         )
     except FileNotFoundError:
@@ -119,10 +145,20 @@ def set_location(lat, lng):
         _sim_proc, _sim_mode = proc, "dvt"
         print("[橋接] 成功, iPhone 現在就是這個位置 (模擬程序在背景跑著, 不要關這個視窗)", flush=True)
         return True
+    # USB 沒找到, 試 Wi-Fi: 第一次 USB 配對後, 同 Wi-Fi 下 remote list 找得到 UDID
+    if not DEVICE_UDID:
+        remote = _find_remote_udid()
+        if remote:
+            print(f"[橋接] USB 沒找到, 改試 Wi-Fi 上的 iPhone ({remote[:8]}...)", flush=True)
+            globals()["DEVICE_UDID"] = remote
+            proc, err = _start_dvt(lat, lng)
+            if proc is not None:
+                _sim_proc, _sim_mode = proc, "dvt"
+                print("[橋接] 成功 (Wi-Fi), iPhone 現在就是這個位置", flush=True)
+                return True
     # dvt 不行 (通常是 iOS 16 以下), 改用舊版指令: 跑完就回傳、定位留著
     print(f"[橋接] dvt 模式不行 ({err}), 改試 iOS 16 以下用的舊版指令...", flush=True)
-    ok, out = run(["pymobiledevice3", "developer", "simulate-location",
-                   "set", "--", str(lat), str(lng)], timeout=60)
+    ok, out = run(_pmd3_cmd() + ["developer", "simulate-location", "set"] + (["--udid", DEVICE_UDID] if DEVICE_UDID else []) + ["--", str(lat), str(lng)], timeout=60)
     if ok:
         _sim_mode = "legacy"
         print("[橋接] 成功 (舊版模式), iPhone 現在就是這個位置", flush=True)
@@ -137,8 +173,8 @@ def clear_location():
     print("[橋接] 還原 iPhone 真實定位", flush=True)
     _stop_sim()  # 砍掉背景模擬程序, 定位就跟著還原
     # 再補一次 clear 指令, 清掉舊版模式可能留下的模擬 (失敗也沒關係)
-    run(["pymobiledevice3", "developer", "dvt", "simulate-location", "clear"], timeout=30)
-    run(["pymobiledevice3", "developer", "simulate-location", "clear"], timeout=30)
+    run(_pmd3_cmd() + ["developer", "dvt", "simulate-location", "clear"], timeout=30)
+    run(_pmd3_cmd() + ["developer", "simulate-location", "clear"], timeout=30)
     print("[橋接] 已還原", flush=True)
     return True
 
