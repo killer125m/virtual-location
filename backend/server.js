@@ -57,7 +57,8 @@ function setLocation(deviceId, loc, mode = 'teleport') {
 }
 function stopRoute(deviceId) {
   const d = devices.get(deviceId);
-  if (d && d.routeTimer) { clearInterval(d.routeTimer); d.routeTimer = null; }
+  if (d && d.routeTimer) { clearInterval(d.routeTimer); d.routeTimer = null; return true; }
+  return false;
 }
 
 // ---- 地理編碼 ----
@@ -138,13 +139,17 @@ app.post('/api/devices/:id/location', (req, res) => {
   const { lat, lng, accuracy } = req.body || {};
   if (typeof lat !== 'number' || typeof lng !== 'number') return res.status(400).json({ error: '需要數字 lat / lng' });
   if (!devices.has(req.params.id)) return res.status(404).json({ error: '裝置不存在, 先 POST /api/devices 註冊' });
+  // 瞬移就是要去新位置: 先停掉跑到一半的路線, 不然路線每秒推播會立刻把裝置拉回路線上,
+  // 看起來就像路線「砍不掉」。
+  if (stopRoute(req.params.id)) io.emit('route:stop', { deviceId: req.params.id });
   const loc = setLocation(req.params.id, { lat, lng, accuracy });
   res.json({ deviceId: req.params.id, location: loc });
 });
 app.post('/api/devices/:id/location/clear', (req, res) => {
   const d = devices.get(req.params.id);
   if (!d) return res.status(404).json({ error: '裝置不存在' });
-  stopRoute(req.params.id); d.location = null;
+  if (stopRoute(req.params.id)) io.emit('route:stop', { deviceId: req.params.id });
+  d.location = null;
   io.emit('location:clear', { deviceId: req.params.id });
   logEvent('location', `${d.name} 已還原真實定位`);
   res.json({ ok: true });
@@ -174,7 +179,7 @@ app.post('/api/devices/:id/route', (req, res) => {
   }, 1000);
   res.json({ ok: true, deviceId: req.params.id, segments: segs.length, totalMeters: Math.round(segs.reduce((a, s) => a + s.d, 0)) });
 });
-app.post('/api/devices/:id/route/stop', (req, res) => { stopRoute(req.params.id); io.emit('route:stop', { deviceId: req.params.id }); res.json({ ok: true }); });
+app.post('/api/devices/:id/route/stop', (req, res) => { if (stopRoute(req.params.id)) io.emit('route:stop', { deviceId: req.params.id }); res.json({ ok: true }); });
 
 app.get('/api/bookmarks', (req, res) => res.json(bookmarks));
 app.post('/api/bookmarks', (req, res) => {
