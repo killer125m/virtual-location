@@ -1,6 +1,6 @@
 # 虛擬定位系統 操作 SOP
 
-版本: 2026-11-17 | 雲端中控台: https://virtual-location.onrender.com
+版本: 2026-11-17 | 雲端中控台網址不公開貼出, 請私訊索取
 程式碼: https://github.com/killer125m/virtual-location
 
 ## 一、這套系統是什麼
@@ -15,7 +15,7 @@
 
 ## 二、一般使用者: 開網頁就能用
 
-1. 開 https://virtual-location.onrender.com
+1. 開雲端中控台網址
    免費版 15 分鐘沒人用會休眠, 第一次開要等 50 秒以上才醒, 是正常的, 等它顯示
    「WebSocket 已連線」再操作。
 2. 右邊「裝置」選一台要改的裝置 (點一下就會選取, 可複選)。
@@ -40,7 +40,7 @@
 3. iPhone 用 USB 接電腦, 點「信任此電腦」。
 4. iPhone: 設定 > 隱私權與安全性 > 開發者模式 > 開啟, 重開機。
 5. 雙擊 `ios-bridge.exe` (或舊方法: `clients/ios-bridge/start-cloud.bat`)。
-   它預設連雲端 https://virtual-location.onrender.com, 不用再設網址。
+   它預設連雲端, 不用再設網址。
    看到「已連上後端」就是通了。
 
 ### 每天使用
@@ -64,7 +64,7 @@
    (手機要允許安裝未知來源 App。)
 2. 手機: 設定 > 關於手機 > 連點版本號碼 7 次, 開啟開發人員選項。
 3. 設定 > 開發人員選項 > 選取模擬位置應用程式 > 選「虛擬定位」。
-4. 開 App, 後端位址填 `https://virtual-location.onrender.com`,
+4. 開 App, 後端位址填雲端中控台網址,
    裝置 ID 預設 `android-pixel-01`, 按開始。
 5. 回雲端中控台, 選那台 Android 裝置, 瞬移 / 播路線。
 6. 不用時在 App 按停止, 或在中控台點「還原定位」。
