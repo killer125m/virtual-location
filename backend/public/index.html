@@ -119,11 +119,13 @@ async function clearSelected(){ for(const id of selected){ await fetch(`/api/dev
 function renderDevices(){
   $('devices').innerHTML = devices.length ? devices.map(d=>`
     <div class="device ${selected.has(d.id)?'sel':''}" onclick="toggleDevice('${d.id}')">
+      <span style="float:right;cursor:pointer;color:#f87171" onclick="event.stopPropagation();deleteDevice('${d.id}')" title="移除裝置">✕</span>
       <span class="dot ${d.status==='online'?'':'off'}"></span><b>${d.name}</b> <span class="meta">${d.type} · ${d.status}</span>
       <div class="meta">${d.location?`📍 ${d.location.lat.toFixed(5)}, ${d.location.lng.toFixed(5)} · ${d.location.mode||''}`:'尚未設定定位'}<br>id: ${d.id}</div>
     </div>`).join('') : '<p class="hint">尚無裝置，點下方模擬新增，或讓真實客戶端連線。</p>';
 }
 function toggleDevice(id){ selected.has(id)?selected.delete(id):selected.add(id); renderDevices(); }
+async function deleteDevice(id){ if(!confirm('確定要移除這台裝置嗎？真機重連後會再出現。')) return; selected.delete(id); await fetch('/api/devices/'+encodeURIComponent(id),{method:'DELETE'}); loadDevices(); }
 async function loadDevices(){ const r=await fetch('/api/devices'); devices=await r.json(); renderDevices(); }
 async function addSimDevice(){
   const types=[['android','Android 手機'],['web','Chrome 擴充'],['ios-bridge','iOS 橋接']];
