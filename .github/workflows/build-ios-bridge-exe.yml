@@ -60,3 +60,15 @@ jobs:
           name: ios-bridge-exe
           path: ios-bridge-exe/
           if-no-files-found: error
+
+      - name: Publish EXE to Release (latest)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest build
+          body: 最新自動建置: Android APK 與 iPhone 橋接 EXE, 下載後照 SOP.md 使用。
+          files: |
+            ios-bridge-exe/ios-bridge.exe
+            ios-bridge-exe/pymobiledevice3.exe
+            ios-bridge-exe/README.txt
+          fail_on_unmatched_files: true
