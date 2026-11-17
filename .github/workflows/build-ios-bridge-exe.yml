@@ -53,7 +53,7 @@ jobs:
             它預設連雲端 https://virtual-location.onrender.com。
             第一次 USB 配對完, 之後同一 Wi-Fi 下不用插線也會試 Wi-Fi。
             這個黑視窗不要關, 關掉 iPhone 就收不到新位置了。
-            到 https://virtual-location.onrender.com 選 ios-bridge-01, 瞬移 / 播路線。
+            到 https://virtual-location.onrender.com 選你的 iPhone 橋接 (裝置 ID 是 ios-開頭加手機 UDID 前 8 碼), 瞬移 / 播路線。
           "@ | Out-File -Encoding utf8 ios-bridge-exe/README.txt
 
       - name: Upload EXE
