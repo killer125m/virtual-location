@@ -35,8 +35,7 @@
 ### 第一次設定 (只做一次)
 
 1. 電腦裝 iTunes (Apple 官網版, 裝驅動用)。
-2. 下載橋接 .exe: GitHub Repo > Actions > Build iOS Bridge EXE > 下載
-   `ios-bridge-exe`, 解壓後裡面有 `ios-bridge.exe`、`pymobiledevice3.exe`、`README.txt`。
+2. 下載橋接 .exe: GitHub Repo > Releases > Latest build > 下載 `ios-bridge.exe`、`pymobiledevice3.exe`、`README.txt` (三個放同一個資料夾)。
    (舊方法: 裝 Python 3.11+ 勾 Add to PATH, 進 `clients/ios-bridge/` 跑 `install.bat`。)
 3. iPhone 用 USB 接電腦, 點「信任此電腦」。
 4. iPhone: 設定 > 隱私權與安全性 > 開發者模式 > 開啟, 重開機。
@@ -61,8 +60,7 @@
 
 ## 四、Android 擁有者: 裝 App 就能用
 
-1. 下載 APK: GitHub Repo > Actions > Build Android APK > 下載
-   `virtual-location-apk`, 裡面是 `app-debug.apk`, 傳到手機安裝。
+1. 下載 APK: GitHub Repo > Releases > Latest build > 下載 `app-debug.apk`, 傳到手機安裝。
    (手機要允許安裝未知來源 App。)
 2. 手機: 設定 > 關於手機 > 連點版本號碼 7 次, 開啟開發人員選項。
 3. 設定 > 開發人員選項 > 選取模擬位置應用程式 > 選「虛擬定位」。
