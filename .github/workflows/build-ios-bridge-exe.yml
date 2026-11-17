@@ -1,0 +1,62 @@
+name: Build iOS Bridge EXE
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "clients/ios-bridge/**"
+      - ".github/workflows/build-ios-bridge-exe.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r clients/ios-bridge/requirements.txt
+          pip install pyinstaller
+
+      - name: Build ios-bridge.exe
+        run: |
+          pyinstaller --onefile --name ios-bridge --console --collect-all pymobiledevice3 --collect-all socketio --hidden-import engineio.async_drivers.threading clients/ios-bridge/ios_bridge.py
+
+      - name: Build pymobiledevice3.exe
+        run: |
+          pyinstaller --onefile --name pymobiledevice3 --console --collect-all pymobiledevice3 clients/ios-bridge/pmd3_main.py
+
+      - name: Package
+        run: |
+          New-Item -ItemType Directory -Force -Path ios-bridge-exe | Out-Null
+          Copy-Item dist/ios-bridge.exe ios-bridge-exe/
+          Copy-Item dist/pymobiledevice3.exe ios-bridge-exe/
+          @"
+          iPhone 橋接 .exe 一鍵啟動版
+          ============================
+          第一次使用前, 還是要做一次 (蘋果規定, 躲不掉):
+            1. 裝 iTunes (Apple 官網版, 裝驅動用)
+            2. iPhone 用 USB 接電腦, 點「信任此電腦」
+            3. iPhone: 設定 > 隱私權與安全性 > 開發者模式 > 開啟, 重開機
+          之後:
+            雙擊 ios-bridge.exe 就好, 不用裝 Python, 不用跑 install.bat。
+            它預設連雲端 https://virtual-location.onrender.com。
+            第一次 USB 配對完, 之後同一 Wi-Fi 下不用插線也會試 Wi-Fi。
+            這個黑視窗不要關, 關掉 iPhone 就收不到新位置了。
+            到 https://virtual-location.onrender.com 選 ios-bridge-01, 瞬移 / 播路線。
+          "@ | Out-File -Encoding utf8 ios-bridge-exe/README.txt
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-bridge-exe
+          path: ios-bridge-exe/
+          if-no-files-found: error
