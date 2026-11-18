@@ -56,9 +56,43 @@ function setLocation(deviceId, loc, mode = 'teleport') {
   return d.location;
 }
 function stopRoute(deviceId) {
+  // 完全停掉路線: 清計時器 + 清掉儲存的路線狀態 (暫停中的路線也會被清掉)。
+  // 回傳有沒有真的停到東西, 呼叫端只在真的停到時才發 route:stop。
   const d = devices.get(deviceId);
-  if (d && d.routeTimer) { clearInterval(d.routeTimer); d.routeTimer = null; return true; }
-  return false;
+  if (!d) return false;
+  let stopped = false;
+  if (d.routeTimer) { clearInterval(d.routeTimer); d.routeTimer = null; stopped = true; }
+  if (d.route) { delete d.route; d.routePaused = false; stopped = true; }
+  return stopped;
+}
+function startRouteTimer(d) {
+  // 用 d.route 裡存的進度 (segIdx / segPos) 繼續跑, 暫停後再繼續也是從同一點接著走,
+  // 不會像重播那樣跳回起點。
+  const r = d.route;
+  d.routeTimer = setInterval(() => {
+    const seg = r.segs[r.segIdx]; r.segPos += r.stepM;
+    if (r.segPos >= seg.d) { r.segIdx++; r.segPos = 0; if (r.segIdx >= r.segs.length) { if (r.loop) { r.segIdx = 0; } else { stopRoute(d.id); io.emit('route:stop', { deviceId: d.id }); return; } } }
+    const s = r.segs[r.segIdx]; const t = s.d ? r.segPos / s.d : 0;
+    const lat = s.from.lat + (s.to.lat - s.from.lat) * t;
+    const lng = s.from.lng + (s.to.lng - s.from.lng) * t;
+    const bearing = (Math.atan2(s.to.lng - s.from.lng, s.to.lat - s.from.lat) * 180 / Math.PI + 360) % 360;
+    setLocation(d.id, { lat, lng, speed: r.speedKmh / 3.6, bearing: Math.round(bearing) }, 'route');
+  }, 1000);
+}
+function pauseRoute(deviceId) {
+  // 暫停: 只停計時器, 路線進度 (segIdx / segPos) 留著, 繼續時從同一點接著走。
+  // 位置本身不動 (模擬程序停在最後一個座標), 點大花、滑金色花苗的時間就有了。
+  const d = devices.get(deviceId);
+  if (!d || !d.routeTimer || !d.route) return false;
+  clearInterval(d.routeTimer); d.routeTimer = null; d.routePaused = true;
+  return true;
+}
+function resumeRoute(deviceId) {
+  const d = devices.get(deviceId);
+  if (!d || !d.route || !d.routePaused) return false;
+  d.routePaused = false;
+  startRouteTimer(d);
+  return true;
 }
 
 // ---- 地理編碼 ----
@@ -166,18 +200,22 @@ app.post('/api/devices/:id/route', (req, res) => {
   const R = 6371000, toRad = (x) => x * Math.PI / 180;
   const dist = (a, b) => { const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng); const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(h)); };
   const segs = []; for (let i = 0; i < waypoints.length - 1; i++) segs.push({ from: waypoints[i], to: waypoints[i + 1], d: dist(waypoints[i], waypoints[i + 1]) });
-  let segIdx = 0, segPos = 0; const stepM = Math.max(1, (speedKmh * 1000) / 3600); // 每秒前進公尺
+  // 路線狀態存在裝置上, 暫停/繼續靠它接著走
+  d.route = { waypoints, speedKmh, loop, segs, segIdx: 0, segPos: 0, stepM: Math.max(1, (speedKmh * 1000) / 3600) };
+  d.routePaused = false;
   io.emit('route:start', { deviceId: req.params.id, waypoints, speedKmh });
-  d.routeTimer = setInterval(() => {
-    const seg = segs[segIdx]; segPos += stepM;
-    if (segPos >= seg.d) { segIdx++; segPos = 0; if (segIdx >= segs.length) { if (loop) { segIdx = 0; } else { stopRoute(req.params.id); io.emit('route:stop', { deviceId: req.params.id }); return; } } }
-    const s = segs[segIdx]; const t = s.d ? segPos / s.d : 0;
-    const lat = s.from.lat + (s.to.lat - s.from.lat) * t;
-    const lng = s.from.lng + (s.to.lng - s.from.lng) * t;
-    const bearing = (Math.atan2(s.to.lng - s.from.lng, s.to.lat - s.from.lat) * 180 / Math.PI + 360) % 360;
-    setLocation(req.params.id, { lat, lng, speed: speedKmh / 3.6, bearing: Math.round(bearing) }, 'route');
-  }, 1000);
+  startRouteTimer(d);
   res.json({ ok: true, deviceId: req.params.id, segments: segs.length, totalMeters: Math.round(segs.reduce((a, s) => a + s.d, 0)) });
+});
+app.post('/api/devices/:id/route/pause', (req, res) => {
+  if (!devices.has(req.params.id)) return res.status(404).json({ error: '裝置不存在' });
+  if (!pauseRoute(req.params.id)) return res.status(400).json({ error: '沒有正在跑的路線可暫停' });
+  io.emit('route:pause', { deviceId: req.params.id }); res.json({ ok: true, paused: true });
+});
+app.post('/api/devices/:id/route/resume', (req, res) => {
+  if (!devices.has(req.params.id)) return res.status(404).json({ error: '裝置不存在' });
+  if (!resumeRoute(req.params.id)) return res.status(400).json({ error: '沒有暫停中的路線可繼續' });
+  io.emit('route:resume', { deviceId: req.params.id }); res.json({ ok: true, paused: false });
 });
 app.post('/api/devices/:id/route/stop', (req, res) => { if (stopRoute(req.params.id)) io.emit('route:stop', { deviceId: req.params.id }); res.json({ ok: true }); });
 
