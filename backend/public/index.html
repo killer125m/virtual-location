@@ -30,6 +30,9 @@ label{font-size:12px;color:#94a3b8}
 .hint{font-size:12px;color:#94a3b8;line-height:1.6}
 #stick{width:140px;height:140px;border-radius:50%;background:#0f172a;border:2px solid #334155;margin:8px auto;position:relative;touch-action:none;user-select:none;-webkit-user-select:none}
 #knob{width:56px;height:56px;border-radius:50%;background:#0284c7;position:absolute;left:42px;top:42px;pointer-events:none}
+#mapWrap{position:relative;height:100%;min-height:400px}
+#joyOverlay{position:absolute;left:12px;bottom:12px;z-index:1000;background:rgba(15,23,42,.9);border:1px solid #334155;border-radius:12px;padding:10px;width:210px}
+#joyOverlay h2{font-size:14px;margin:0 0 6px;color:#7dd3fc}
 </style>
 </head>
 <body>
@@ -64,17 +67,20 @@ label{font-size:12px;color:#94a3b8}
     <div class="row"><button class="ghost" onclick="setSpeed(4)">🚶 散步 4</button><button class="ghost" onclick="setSpeed(6)">🏃 快走 6</button><button class="ghost" onclick="setSpeed(12)">🚲 慢騎 12</button></div>
     <label><input type="checkbox" id="loop" style="width:auto"> 🔁 循環播放（走完重頭再走）</label>
     <div class="row"><button onclick="playRoute()">▶ 播放路線</button><button class="ghost" id="pauseBtn" onclick="togglePause()">⏸ 暫停</button><button class="danger" onclick="stopRoute()">■ 停止</button></div>
-
-    <h2>4 · 虛擬搖桿</h2>
-    <p class="hint">按住搖桿往方向推，頭像就往那走；放開就停。速度用下面拉桿自己設，推搖桿只控制方向。搖桿會先停掉路線，電腦滑鼠拖、手機手指拖都可以。</p>
-    <div id="stick"><div id="knob"></div></div>
-    <p class="hint" id="stickSpeed" style="text-align:center">搖桿速度：0 km/h</p>
-    <label>搖桿速度 <span id="joySpeedVal">6</span> km/h</label>
-    <input type="range" min="4" max="20" value="6" oninput="document.getElementById('joySpeedVal').textContent=this.value" id="joySpeed">
-    <div class="row"><button class="ghost" onclick="setJoySpeed(4)">🚶 散步 4</button><button class="ghost" onclick="setJoySpeed(6)">🏃 快走 6</button><button class="ghost" onclick="setJoySpeed(12)">🚲 慢騎 12</button></div>
   </section>
 
-  <div id="map"></div>
+  <div id="mapWrap">
+    <div id="map"></div>
+    <div id="joyOverlay">
+      <h2>🕹️ 虛擬搖桿</h2>
+      <p class="hint">按住往方向推，放開就停；速度用下面拉桿設，推搖桿只控制方向。</p>
+      <div id="stick"><div id="knob"></div></div>
+      <p class="hint" id="stickSpeed" style="text-align:center">搖桿速度：0 km/h</p>
+      <label>搖桿速度 <span id="joySpeedVal">6</span> km/h</label>
+      <input type="range" min="4" max="20" value="6" oninput="document.getElementById('joySpeedVal').textContent=this.value" id="joySpeed">
+      <div class="row"><button class="ghost" onclick="setJoySpeed(4)">🚶 散步 4</button><button class="ghost" onclick="setJoySpeed(6)">🏃 快走 6</button><button class="ghost" onclick="setJoySpeed(12)">🚲 慢騎 12</button></div>
+    </div>
+  </div>
 
   <section class="card">
     <h2>裝置 <button class="small ghost" onclick="loadDevices()">重新整理</button></h2>
