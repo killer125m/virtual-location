@@ -37,7 +37,7 @@ label{font-size:12px;color:#94a3b8}
 <main>
   <section class="card">
     <h2>1 · 輸入地址 / 點地圖</h2>
-    <input id="q" placeholder="例：台中市南區興大路145號" value="台中市南區興大路145號">
+    <input id="q" placeholder="例：台中市南區興大路145號">
     <button onclick="search()">🔍 搜尋地址轉座標</button>
     <div id="results"></div>
     <label>目前座標</label>
@@ -57,7 +57,7 @@ label{font-size:12px;color:#94a3b8}
     <div id="waypoints" class="meta">尚無途經點</div>
     <div class="row"><button class="ghost" onclick="addWaypoint()">＋ 加入途經點</button><button class="ghost" onclick="clearWaypoints()">🗑 清除路線</button></div>
     <label>速度 <span id="speedLabel">5</span> km/h</label>
-    <input type="range" min="1" max="80" value="5" oninput="document.getElementById('speedLabel').textContent=this.value" id="speed">
+    <input type="range" min="4" max="80" value="5" oninput="document.getElementById('speedLabel').textContent=this.value" id="speed">
     <div class="row"><button class="ghost" onclick="setSpeed(4)">🚶 散步 4</button><button class="ghost" onclick="setSpeed(6)">🏃 快走 6</button><button class="ghost" onclick="setSpeed(12)">🚲 慢騎 12</button></div>
     <label><input type="checkbox" id="loop" style="width:auto"> 🔁 循環播放（走完重頭再走）</label>
     <div class="row"><button onclick="playRoute()">▶ 播放路線</button><button class="danger" onclick="stopRoute()">■ 停止</button></div>
@@ -168,7 +168,7 @@ async function init(){
   for(const [id,type,name] of [['android-pixel-01','android','Pixel 8 · Android'],['chrome-ext-01','web','Chrome 擴充功能'],['ios-bridge-01','ios-bridge','iPhone 橋接 · Mac mini']]){
     await fetch('/api/devices',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,type,name})}).catch(()=>{});
   }
-  await loadDevices(); await loadBookmarks(); search();
+  await loadDevices(); await loadBookmarks();
 }
 init();
 </script>
