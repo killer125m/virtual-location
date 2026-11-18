@@ -66,17 +66,23 @@ def _pmd3_cmd():
     return ["pymobiledevice3"]
 
 
-def _find_remote_udid():
-    """找 Wi-Fi 上的 iPhone: 第一次 USB 配對後, 同 Wi-Fi 下 remote list 會看到它。
-    回傳 UDID (40 碼 hex) 或空字串。"""
+def _find_phone():
+    """找 iPhone: 先查 USB (usbmux list), 再查 Wi-Fi (remote list)。
+    回傳 (udid, 'USB'/'Wi-Fi') 或 ('', None)。"""
     import re
-    for args in (["remote", "list"], ["usbmux", "list"]):
+    for args, transport in ((["usbmux", "list"], "USB"), (["remote", "list"], "Wi-Fi")):
         ok, out = run(_pmd3_cmd() + args, timeout=30)
         if ok and out:
             m = re.findall(r"\b[0-9a-fA-F]{40}\b", out)
             if m:
-                return m[0]
-    return ""
+                return m[0], transport
+    return "", None
+
+
+def _find_remote_udid():
+    """(相容舊呼叫) 找 Wi-Fi/USB 上的 iPhone UDID, 或空字串。"""
+    udid, _ = _find_phone()
+    return udid
 
 # 正在背景跑的 dvt simulate-location set 程序 (iOS 17+ 用)。定位要一直留著,
 # 這個程序就不能停; 換位置 / 還原時先砍掉它。
@@ -97,25 +103,78 @@ def run(cmd, timeout=60):
 
 
 _id_resolved = False
+_phone_state = "unknown"  # 'connected' / 'missing' / 'unknown'
+_phone_udid = ""
+_sio = None  # serve() 裡的 Socket.io 客戶端, 給 _watch_phone 重新註冊用
+
+
+def _apply_phone(udid, transport):
+    """套用找到的 iPhone: 記下 UDID, 沒手動設 DEVICE_ID 時用 UDID 前 8 碼當裝置 ID,
+    並在視窗印出連線狀態, 這樣才確認得了手機到底有沒有真的連上。"""
+    global DEVICE_ID, DEVICE_NAME, DEVICE_UDID, _phone_udid, _phone_state
+    DEVICE_UDID = udid
+    _phone_udid = udid
+    _phone_state = "connected"
+    if not DEVICE_ID_FROM_ENV:
+        DEVICE_ID = f"ios-{udid[:8].lower()}"
+        DEVICE_NAME = f"iPhone 橋接 ({udid[:8]})"
+    print(f"[橋接] iPhone 已連上 ({transport}), 裝置 ID: {DEVICE_ID}", flush=True)
+
+
+def _delete_device(device_id):
+    """向後端刪掉舊的裝置紀錄 (換 ID 時用, 免得中控台留兩筆)。失敗也沒關係。"""
+    try:
+        import urllib.request
+        req = urllib.request.Request(f"{BACKEND_URL}/api/devices/{device_id}", method="DELETE")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            r.read()
+    except Exception:
+        pass
+
+
+def _watch_phone():
+    """背景每 15 秒檢查 iPhone 在不在: 啟動時沒接手機、之後才插上也會自動偵測到,
+    不用重開橋接; 拔掉/斷線時在視窗警告, 這樣橋接視窗就能確認手機到底有沒有真的連上。"""
+    global _phone_state
+    while True:
+        time.sleep(15)
+        try:
+            udid, transport = _find_phone()
+        except Exception:
+            continue
+        if udid:
+            if udid != _phone_udid:
+                old_id = DEVICE_ID
+                _apply_phone(udid, transport)
+                if _sio is not None and getattr(_sio, "connected", False):
+                    if DEVICE_ID != old_id:
+                        _delete_device(old_id)
+                    _sio.emit("register", {"id": DEVICE_ID, "type": "ios-bridge", "name": DEVICE_NAME})
+            elif _phone_state != "connected":
+                _phone_state = "connected"
+                print(f"[橋接] iPhone 已連上 ({transport})", flush=True)
+        else:
+            if _phone_state == "connected":
+                _phone_state = "missing"
+                print("[橋接] iPhone 已斷開 (找不到裝置), 請檢查 USB 有沒有鬆、手機有沒有鎖屏、Wi-Fi 是不是同一個", flush=True)
 
 
 def _ensure_device_id():
     """決定裝置 ID: 沒手動設 DEVICE_ID 時, 用 iPhone 的 UDID 前 8 碼當 ID
     (例 ios-a1b2c3d4), 每支 iPhone 天生不一樣, 兩個人同時用也不會撞成同一台。
     順便把 UDID 記下來, 後面 dvt 指令直接指這支手機。
-    找不到手機時先用預設 ios-bridge-01 (接上手機後重開橋接, 就會自動用手機 ID)。"""
-    global DEVICE_ID, DEVICE_NAME, DEVICE_UDID, _id_resolved
+    找不到手機時先用預設 ios-bridge-01, 之後 _watch_phone 會每 15 秒自動偵測,
+    接上手機就自動換成手機 ID, 不用重開橋接。"""
+    global DEVICE_ID, DEVICE_NAME, DEVICE_UDID, _id_resolved, _phone_state
     if _id_resolved or DEVICE_ID_FROM_ENV:
         return
     _id_resolved = True
-    udid = _find_remote_udid()
+    udid, transport = _find_phone()
     if udid:
-        DEVICE_UDID = udid
-        DEVICE_ID = f"ios-{udid[:8].lower()}"
-        DEVICE_NAME = f"iPhone 橋接 ({udid[:8]})"
-        print(f"[橋接] 用這支 iPhone 的 ID: {DEVICE_ID}", flush=True)
+        _apply_phone(udid, transport)
     else:
-        print("[橋接] 找不到 iPhone, 先用 ios-bridge-01 (接上手機後重開橋接, 就會自動用手機 ID)", flush=True)
+        _phone_state = "missing"
+        print("[橋接] 找不到 iPhone, 先用 ios-bridge-01 (接上手機後會自動偵測, 不用重開橋接)", flush=True)
 
 
 def list_devices():
@@ -271,6 +330,7 @@ def clear_location():
 
 
 def serve():
+    global _sio
     try:
         import socketio
     except ImportError:
@@ -278,6 +338,7 @@ def serve():
         sys.exit(1)
 
     sio = socketio.Client(reconnection=True, reconnection_attempts=0)
+    _sio = sio
 
     @sio.event
     def connect():
@@ -309,6 +370,7 @@ def serve():
     print(f"[橋接] 啟動, 裝置 {DEVICE_ID} ({DEVICE_NAME}), 後端 {BACKEND_URL}")
     print("[橋接] 請確認 iPhone 已用 USB 接上並信任電腦, 然後到中控台選這台裝置")
     threading.Thread(target=_watch_sim, daemon=True).start()
+    threading.Thread(target=_watch_phone, daemon=True).start()  # 每 15 秒檢查 iPhone 在不在
     try:
         while True:
             try:
