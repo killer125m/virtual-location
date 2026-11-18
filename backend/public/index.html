@@ -66,9 +66,12 @@ label{font-size:12px;color:#94a3b8}
     <div class="row"><button onclick="playRoute()">▶ 播放路線</button><button class="ghost" id="pauseBtn" onclick="togglePause()">⏸ 暫停</button><button class="danger" onclick="stopRoute()">■ 停止</button></div>
 
     <h2>4 · 虛擬搖桿</h2>
-    <p class="hint">按住搖桿往方向推，頭像就往那走；放開就停。速度跟上面拉桿一樣。搖桿會先停掉路線，電腦滑鼠拖、手機手指拖都可以。</p>
+    <p class="hint">按住搖桿往方向推，頭像就往那走；放開就停。速度用下面拉桿自己設，推搖桿只控制方向。搖桿會先停掉路線，電腦滑鼠拖、手機手指拖都可以。</p>
     <div id="stick"><div id="knob"></div></div>
-    <p class="hint" id="stickSpeed" style="text-align:center">搖桿速度：0 km/h（推到底 = 上面拉桿的速度）</p>
+    <p class="hint" id="stickSpeed" style="text-align:center">搖桿速度：0 km/h</p>
+    <label>搖桿速度 <span id="joySpeedVal">6</span> km/h</label>
+    <input type="range" min="4" max="20" value="6" oninput="document.getElementById('joySpeedVal').textContent=this.value" id="joySpeed">
+    <div class="row"><button class="ghost" onclick="setJoySpeed(4)">🚶 散步 4</button><button class="ghost" onclick="setJoySpeed(6)">🏃 快走 6</button><button class="ghost" onclick="setJoySpeed(12)">🚲 慢騎 12</button></div>
   </section>
 
   <div id="map"></div>
@@ -196,22 +199,25 @@ function stickMove(e){
   stickVec = {dx, dy};
   $('knob').style.left = (42 + dx*42) + 'px';
   $('knob').style.top = (42 - dy*42) + 'px';
-  // 搖桿速度 = 拉桿速度 × 推桿幅度, 即時顯示, 推到底就是拉桿的速度
-  $('stickSpeed').textContent = `搖桿速度：${(+$('speed').value * mag).toFixed(1)} km/h（推到底 ${$('speed').value} km/h）`;
+  // 搖桿只控制方向, 速度固定用下面拉桿設的值 (推多大力都一樣快)
+  $('stickSpeed').textContent = `搖桿速度：${$('joySpeed').value} km/h`;
   if (Date.now() - lastStickSend < 150) return;
   lastStickSend = Date.now();
   sendJoystick();
 }
+function setJoySpeed(v){ $('joySpeed').value = v; $('joySpeedVal').textContent = v; }
 async function sendJoystick(){
-  if (Math.hypot(stickVec.dx, stickVec.dy) < 0.15) return;
-  const speed = +$('speed').value;
-  for(const id of selected){ await fetch(`/api/devices/${id}/joystick`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dx:stickVec.dx,dy:stickVec.dy,speedKmh:speed})}); }
+  const mag = Math.hypot(stickVec.dx, stickVec.dy);
+  if (mag < 0.15) return;
+  const speed = +$('joySpeed').value;
+  // 只送方向 (單位向量), 速度固定用拉桿值, 不隨推桿幅度變
+  for(const id of selected){ await fetch(`/api/devices/${id}/joystick`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dx:stickVec.dx/mag,dy:stickVec.dy/mag,speedKmh:speed})}); }
 }
 async function stickEnd(){
   if(!stickActive) return;
   stickActive = false; stickVec = {dx:0, dy:0};
   $('knob').style.left = '42px'; $('knob').style.top = '42px';
-  $('stickSpeed').textContent = '搖桿速度：0 km/h（推到底 = 上面拉桿的速度）';
+  $('stickSpeed').textContent = '搖桿速度：0 km/h';
   for(const id of selected){ await fetch(`/api/devices/${id}/joystick/stop`,{method:'POST'}); }
   log('搖桿放開，已停在原地');
 }
