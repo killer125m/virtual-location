@@ -30,7 +30,7 @@ jobs:
 
       - name: Build ios-bridge.exe
         run: |
-          pyinstaller --onefile --name ios-bridge --console --collect-all pymobiledevice3 --collect-all pyimg4 --collect-all pykdebugparser --collect-all pytun_pmd3 --collect-all socketio --copy-metadata pyimg4 --copy-metadata pykdebugparser --copy-metadata pytun_pmd3 --copy-metadata pymobiledevice3 --hidden-import engineio.async_drivers.threading clients/ios-bridge/ios_bridge.py
+          pyinstaller --onefile --name ios-bridge --console --collect-all pymobiledevice3 --collect-all pyimg4 --collect-all pykdebugparser --collect-all pytun_pmd3 --collect-all socketio --collect-all websocket --copy-metadata pyimg4 --copy-metadata pykdebugparser --copy-metadata pytun_pmd3 --copy-metadata pymobiledevice3 --hidden-import engineio.async_drivers.threading clients/ios-bridge/ios_bridge.py
 
       - name: Build pymobiledevice3.exe
         run: |
