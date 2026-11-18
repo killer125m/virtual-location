@@ -60,7 +60,7 @@ label{font-size:12px;color:#94a3b8}
     <input type="range" min="4" max="80" value="5" oninput="document.getElementById('speedLabel').textContent=this.value" id="speed">
     <div class="row"><button class="ghost" onclick="setSpeed(4)">🚶 散步 4</button><button class="ghost" onclick="setSpeed(6)">🏃 快走 6</button><button class="ghost" onclick="setSpeed(12)">🚲 慢騎 12</button></div>
     <label><input type="checkbox" id="loop" style="width:auto"> 🔁 循環播放（走完重頭再走）</label>
-    <div class="row"><button onclick="playRoute()">▶ 播放路線</button><button class="danger" onclick="stopRoute()">■ 停止</button></div>
+    <div class="row"><button onclick="playRoute()">▶ 播放路線</button><button class="ghost" id="pauseBtn" onclick="togglePause()">⏸ 暫停</button><button class="danger" onclick="stopRoute()">■ 停止</button></div>
   </section>
 
   <div id="map"></div>
@@ -77,7 +77,7 @@ label{font-size:12px;color:#94a3b8}
 <script>
 const socket = io();
 let map, marker, routeLine, selected = new Set(['android-pixel-01','chrome-ext-01','ios-bridge-01']);
-let devices = [], waypoints = [];
+let devices = [], waypoints = [], routePaused = false;
 const $ = id => document.getElementById(id);
 function log(m){ $('log').textContent = new Date().toLocaleTimeString() + '  ' + m + '\n' + $('log').textContent; }
 
@@ -98,8 +98,10 @@ socket.on('location:update', ({deviceId, location}) => {
   if(selected.has(deviceId)){ marker.setLatLng([location.lat, location.lng]); }
 });
 socket.on('location:clear', ({deviceId})=> log(`還原 ${deviceId} 真實定位`));
-socket.on('route:start', ({deviceId})=> log(`路線開始 ${deviceId}`));
-socket.on('route:stop', ({deviceId})=> log(`路線停止 ${deviceId}`));
+socket.on('route:start', ({deviceId})=> { routePaused=false; setPauseBtn(); log(`路線開始 ${deviceId}`); });
+socket.on('route:pause', ({deviceId})=> { routePaused=true; setPauseBtn(); log(`路線已暫停 ${deviceId}，位置凍結在原地`); });
+socket.on('route:resume', ({deviceId})=> { routePaused=false; setPauseBtn(); log(`路線繼續 ${deviceId}，從同一點接著走`); });
+socket.on('route:stop', ({deviceId})=> { routePaused=false; setPauseBtn(); log(`路線停止 ${deviceId}`); });
 
 async function search(){
   const q=$('q').value.trim(); if(!q) return;
@@ -154,14 +156,24 @@ function renderWaypoints(){
   if(waypoints.length>1) routeLine=L.polyline(waypoints.map(w=>[w.lat,w.lng]),{color:'#38bdf8'}).addTo(map);
 }
 function setSpeed(v){ $('speed').value=v; $('speedLabel').textContent=v; }
+function setPauseBtn(){ $('pauseBtn').textContent = routePaused ? '▶ 繼續' : '⏸ 暫停'; }
+async function togglePause(){
+  // 暫停只凍結位置、不清路線; 繼續從同一點接著走, 不會跳回起點。
+  const url = routePaused ? 'route/resume' : 'route/pause';
+  let ok = false;
+  for(const id of selected){ const r = await fetch(`/api/devices/${id}/${url}`,{method:'POST'}); if(r.ok) ok = true; }
+  if(ok){ routePaused = !routePaused; setPauseBtn(); log(routePaused ? '路線已暫停，位置凍結在原地' : '路線繼續，從同一點接著走'); }
+  else log(routePaused ? '沒有暫停中的路線可繼續' : '沒有正在跑的路線可暫停');
+}
 async function playRoute(){
   if(waypoints.length<2){ alert('至少需要 2 個途經點'); return; }
   const speed=+ $('speed').value;
   const loop=$('loop').checked;
   for(const id of selected){ await fetch(`/api/devices/${id}/route`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({waypoints,speedKmh:speed,loop})}); }
+  routePaused=false; setPauseBtn();
   log(`路線播放中，${waypoints.length} 點，${speed} km/h${loop?'，循環':''}`);
 }
-async function stopRoute(){ for(const id of selected){ await fetch(`/api/devices/${id}/route/stop`,{method:'POST'}); } log('已停止路線'); }
+async function stopRoute(){ for(const id of selected){ await fetch(`/api/devices/${id}/route/stop`,{method:'POST'}); } routePaused=false; setPauseBtn(); log('已停止路線'); }
 async function init(){
   const h=await (await fetch('/health')).json(); $('geoStatus').textContent='Geocoder: '+h.geocoder;
   // 預設三台模擬裝置，演示用
