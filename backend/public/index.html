@@ -28,6 +28,8 @@ button.ghost{background:#334155} button.danger{background:#b91c1c} button.small{
 label{font-size:12px;color:#94a3b8}
 .row{display:flex;gap:8px}.row>*{flex:1}
 .hint{font-size:12px;color:#94a3b8;line-height:1.6}
+#stick{width:140px;height:140px;border-radius:50%;background:#0f172a;border:2px solid #334155;margin:8px auto;position:relative;touch-action:none;user-select:none;-webkit-user-select:none}
+#knob{width:56px;height:56px;border-radius:50%;background:#0284c7;position:absolute;left:42px;top:42px;pointer-events:none}
 </style>
 </head>
 <body>
@@ -62,6 +64,10 @@ label{font-size:12px;color:#94a3b8}
     <div class="row"><button class="ghost" onclick="setSpeed(4)">🚶 散步 4</button><button class="ghost" onclick="setSpeed(6)">🏃 快走 6</button><button class="ghost" onclick="setSpeed(12)">🚲 慢騎 12</button></div>
     <label><input type="checkbox" id="loop" style="width:auto"> 🔁 循環播放（走完重頭再走）</label>
     <div class="row"><button onclick="playRoute()">▶ 播放路線</button><button class="ghost" id="pauseBtn" onclick="togglePause()">⏸ 暫停</button><button class="danger" onclick="stopRoute()">■ 停止</button></div>
+
+    <h2>4 · 虛擬搖桿</h2>
+    <p class="hint">按住搖桿往方向推，頭像就往那走；放開就停。速度跟上面拉桿一樣。搖桿會先停掉路線，電腦滑鼠拖、手機手指拖都可以。</p>
+    <div id="stick"><div id="knob"></div></div>
   </section>
 
   <div id="map"></div>
@@ -100,6 +106,8 @@ socket.on('location:update', ({deviceId, location}) => {
 });
 socket.on('location:clear', ({deviceId})=> log(`還原 ${deviceId} 真實定位`));
 socket.on('route:start', ({deviceId})=> { routePaused=false; setPauseBtn(); log(`路線開始 ${deviceId}`); });
+socket.on('joystick:start', ({deviceId})=> log(`搖桿開始 ${deviceId}`));
+socket.on('joystick:stop', ({deviceId})=> log(`搖桿停止 ${deviceId}`));
 socket.on('route:pause', ({deviceId})=> { routePaused=true; setPauseBtn(); log(`路線已暫停 ${deviceId}，位置凍結在原地`); });
 socket.on('route:resume', ({deviceId})=> { routePaused=false; setPauseBtn(); log(`路線繼續 ${deviceId}，從同一點接著走`); });
 socket.on('route:stop', ({deviceId})=> { routePaused=false; setPauseBtn(); log(`路線停止 ${deviceId}`); });
@@ -175,6 +183,38 @@ async function playRoute(){
   log(`路線播放中，${waypoints.length} 點，${speed} km/h${loop?'，循環':''}`);
 }
 async function stopRoute(){ for(const id of selected){ await fetch(`/api/devices/${id}/route/stop`,{method:'POST'}); } routePaused=false; setPauseBtn(); log('已停止路線'); }
+
+// 虛擬搖桿: 按住推、放開停。方向每 150ms 送一次後端, 幅度小於 0.15 視為回中不送。
+let stickActive = false, stickVec = {dx:0, dy:0}, lastStickSend = 0;
+function stickMove(e){
+  const r = $('stick').getBoundingClientRect();
+  let dx = (e.clientX - (r.left + r.width/2)) / (r.width/2);
+  let dy = -((e.clientY - (r.top + r.height/2)) / (r.height/2)); // 螢幕上 = 北
+  const mag = Math.hypot(dx, dy);
+  if (mag > 1) { dx /= mag; dy /= mag; }
+  stickVec = {dx, dy};
+  $('knob').style.left = (42 + dx*42) + 'px';
+  $('knob').style.top = (42 - dy*42) + 'px';
+  if (Date.now() - lastStickSend < 150) return;
+  lastStickSend = Date.now();
+  sendJoystick();
+}
+async function sendJoystick(){
+  if (Math.hypot(stickVec.dx, stickVec.dy) < 0.15) return;
+  const speed = +$('speed').value;
+  for(const id of selected){ await fetch(`/api/devices/${id}/joystick`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dx:stickVec.dx,dy:stickVec.dy,speedKmh:speed})}); }
+}
+async function stickEnd(){
+  if(!stickActive) return;
+  stickActive = false; stickVec = {dx:0, dy:0};
+  $('knob').style.left = '42px'; $('knob').style.top = '42px';
+  for(const id of selected){ await fetch(`/api/devices/${id}/joystick/stop`,{method:'POST'}); }
+  log('搖桿放開，已停在原地');
+}
+$('stick').addEventListener('pointerdown', e => { stickActive = true; $('stick').setPointerCapture(e.pointerId); stickMove(e); });
+$('stick').addEventListener('pointermove', e => { if(stickActive) stickMove(e); });
+$('stick').addEventListener('pointerup', stickEnd);
+$('stick').addEventListener('pointercancel', stickEnd);
 async function init(){
   const h=await (await fetch('/health')).json(); $('geoStatus').textContent='Geocoder: '+h.geocoder;
   // 預設三台模擬裝置，演示用
