@@ -10,6 +10,10 @@ open until interrupted"), 所以不能用 subprocess.run() 等它跑完,
 否則會卡 90 秒、逾時被砍掉、定位跟著還原, 路線播放也永遠跑不起來。
 正確做法: 用 Popen 在背景跑著, 要換位置就先砍掉舊的、再開新的;
 要還原就砍掉它 (再補一次 clear)。
+路線播放時後端每秒推播一次, 但 dvt 模擬重開一次要 1-2 秒才生效,
+每秒重開會讓手機定位在真實/模擬之間一直跳, 遊戲就不同步。
+所以只移動超過 5 公尺才重開模擬, 且換位置時不再等 8 秒確認
+(上一個模擬剛剛還在跑, 環境驗過是好的); 冷啟動才等 8 秒。
 
 iOS 17+ 用 dvt 版 (RSD tunnel 會自動建, 不用另外跑 tunneld)。
 iOS 16 以下 dvt 會失敗, 自動改用舊版 `developer simulate-location set`
@@ -150,9 +154,25 @@ def _drain_stream(stream, prefix):
         pass
 
 
+def _dist_m(a, b):
+    """兩組座標的距離 (公尺, Haversine)。"""
+    import math
+    R = 6371000
+    la1, lo1 = math.radians(a[0]), math.radians(a[1])
+    la2, lo2 = math.radians(b[0]), math.radians(b[1])
+    h = math.sin((la2 - la1) / 2) ** 2 + math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2
+    return 2 * R * math.asin(math.sqrt(h))
+
+
+_last_applied = None  # 上次真正寫入的座標 (lat, lng)
+_last_restart = 0.0   # 上次重開模擬程序的時間
+
+
 def _start_dvt(lat, lng, grace=8):
     """背景啟動 dvt simulate-location set。
-    幾秒內就自己結束 = 報錯 (回傳錯誤訊息); 還在跑 = 定位已寫入。"""
+    幾秒內就自己結束 = 報錯 (回傳錯誤訊息); 還在跑 = 定位已寫入。
+    grace=0 時不等, 直接回傳程序 (路線播放中換位置用, 環境剛剛才驗過是好的;
+    程序若立刻崩潰, _watch_sim 會在幾秒內警告, [dvt] 行也會印出錯誤)。"""
     try:
         proc = subprocess.Popen(
             (_pmd3_cmd() + ["developer", "dvt", "simulate-location", "set"] + (["--udid", DEVICE_UDID] if DEVICE_UDID else []) + ["--", str(lat), str(lng)]),
@@ -163,6 +183,8 @@ def _start_dvt(lat, lng, grace=8):
     except Exception as e:
         return None, str(e)
     threading.Thread(target=_drain_stream, args=(proc.stderr, "[dvt]"), daemon=True).start()
+    if grace <= 0:
+        return proc, None
     try:
         rc = proc.wait(timeout=grace)
         time.sleep(0.5)  # 等 drain thread 把最後的錯誤行印完
@@ -187,12 +209,28 @@ def _watch_sim():
 
 
 def set_location(lat, lng):
-    global _sim_proc, _sim_mode
+    global _sim_proc, _sim_mode, _last_applied, _last_restart
+    # 路線播放中每秒推播一次, 但 dvt 模擬重開一次要 1-2 秒才生效:
+    # 每秒重開會讓手機定位在真實/模擬之間一直跳, 遊戲就不同步。
+    # 所以只動了一點點就不用重開 (模擬還在跑、位置差不多, 遊戲看不出來);
+    # 移動超過 5 公尺、且距離上次重開超過 2 秒, 才重開一次。
+    # 超過 10 秒沒重開也重開一次, 免得模擬停在太舊的位置。
+    # 但一次跳超過 100 公尺是瞬移, 立刻重開, 不用等。
+    if _sim_proc is not None and _sim_proc.poll() is None and _last_applied is not None:
+        elapsed = time.time() - _last_restart
+        d = _dist_m(_last_applied, (lat, lng))
+        if d < 100 and (elapsed < 2 or (d < 5 and elapsed < 10)):
+            return True
     print(f"[橋接] 寫入 iPhone: {lat}, {lng}", flush=True)
+    was_running = _sim_proc is not None
     _stop_sim()  # 先停掉上一個位置的模擬, 再開新的
-    proc, err = _start_dvt(lat, lng)
+    # 路線播放中換位置: 上一個模擬剛剛還在跑 (環境驗過是好的), 不用再等 8 秒確認;
+    # 冷啟動 (剛開橋接、剛還原) 才等 8 秒, 確認程序沒崩。
+    proc, err = _start_dvt(lat, lng, grace=0 if was_running else 8)
     if proc is not None:
         _sim_proc, _sim_mode = proc, "dvt"
+        _last_applied = (lat, lng)
+        _last_restart = time.time()
         print("[橋接] 成功, iPhone 現在就是這個位置 (模擬程序在背景跑著, 不要關這個視窗)", flush=True)
         return True
     # USB 沒找到, 試 Wi-Fi: 第一次 USB 配對後, 同 Wi-Fi 下 remote list 找得到 UDID
@@ -220,6 +258,9 @@ def set_location(lat, lng):
 
 
 def clear_location():
+    global _last_applied, _last_restart
+    _last_applied = None
+    _last_restart = 0.0
     print("[橋接] 還原 iPhone 真實定位", flush=True)
     _stop_sim()  # 砍掉背景模擬程序, 定位就跟著還原
     # 再補一次 clear 指令, 清掉舊版模式可能留下的模擬 (失敗也沒關係)
