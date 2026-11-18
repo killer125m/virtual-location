@@ -65,6 +65,34 @@ function stopRoute(deviceId) {
   if (d.route) { delete d.route; d.routePaused = false; stopped = true; }
   return stopped;
 }
+function moveBy(loc, bearingDeg, distM) {
+  // 從 loc 沿 bearingDeg 方向走 distM 公尺後的新座標 (大圓目的地公式)
+  const R = 6371000, toRad = (x) => x * Math.PI / 180, toDeg = (x) => x * 180 / Math.PI;
+  const d = distM / R, br = toRad(bearingDeg);
+  const lat1 = toRad(loc.lat), lng1 = toRad(loc.lng);
+  const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(br));
+  const lng2 = lng1 + Math.atan2(Math.sin(br) * Math.sin(d) * Math.cos(lat1), Math.cos(d) - Math.sin(lat1) * Math.sin(lat2));
+  return { lat: toDeg(lat2), lng: toDeg(lng2) };
+}
+function startJoystickTimer(d) {
+  // 搖桿: 每秒沿目前方向前進 (速度 × 推桿幅度), 位置每秒推播, 跟路線同一節奏。
+  const j = d.joystick;
+  d.joystickTimer = setInterval(() => {
+    if (!d.location) return;
+    const speedMs = (j.speedKmh * 1000) / 3600 * j.magnitude;
+    const bearing = (Math.atan2(j.dx, j.dy) * 180 / Math.PI + 360) % 360;
+    const next = moveBy(d.location, bearing, speedMs);
+    setLocation(d.id, { lat: next.lat, lng: next.lng, speed: j.speedKmh / 3.6, bearing: Math.round(bearing) }, 'joystick');
+  }, 1000);
+}
+function stopJoystick(deviceId) {
+  const d = devices.get(deviceId);
+  if (!d) return false;
+  let stopped = false;
+  if (d.joystickTimer) { clearInterval(d.joystickTimer); d.joystickTimer = null; stopped = true; }
+  if (d.joystick) { delete d.joystick; stopped = true; }
+  return stopped;
+}
 function startRouteTimer(d) {
   // 用 d.route 裡存的進度 (segIdx / segPos) 繼續跑, 暫停後再繼續也是從同一點接著走,
   // 不會像重播那樣跳回起點。
@@ -155,7 +183,7 @@ app.post('/api/devices', (req, res) => {
     broadcastDevices();
     return res.json(publicDevice(existing));
   }
-  const d = { id, type, name: name || id, status: 'online', socketId: null, location: null, lastSeen: Date.now(), routeTimer: null };
+  const d = { id, type, name: name || id, status: 'online', socketId: null, location: null, lastSeen: Date.now(), routeTimer: null, joystickTimer: null };
   devices.set(id, d); broadcastDevices();
   logEvent('device', `裝置註冊: ${d.name} (${type})`);
   res.status(201).json(publicDevice(d));
@@ -164,6 +192,7 @@ app.delete('/api/devices/:id', (req, res) => {
   const d = devices.get(req.params.id);
   if (!d) return res.status(404).json({ error: '裝置不存在' });
   stopRoute(req.params.id);
+  stopJoystick(req.params.id);
   devices.delete(req.params.id);
   broadcastDevices();
   logEvent('device', `裝置已移除: ${d.name} (${d.type})`);
@@ -176,6 +205,7 @@ app.post('/api/devices/:id/location', (req, res) => {
   // 瞬移就是要去新位置: 先停掉跑到一半的路線, 不然路線每秒推播會立刻把裝置拉回路線上,
   // 看起來就像路線「砍不掉」。
   if (stopRoute(req.params.id)) io.emit('route:stop', { deviceId: req.params.id });
+  stopJoystick(req.params.id);
   const loc = setLocation(req.params.id, { lat, lng, accuracy });
   res.json({ deviceId: req.params.id, location: loc });
 });
@@ -183,6 +213,7 @@ app.post('/api/devices/:id/location/clear', (req, res) => {
   const d = devices.get(req.params.id);
   if (!d) return res.status(404).json({ error: '裝置不存在' });
   if (stopRoute(req.params.id)) io.emit('route:stop', { deviceId: req.params.id });
+  stopJoystick(req.params.id);
   d.location = null;
   io.emit('location:clear', { deviceId: req.params.id });
   logEvent('location', `${d.name} 已還原真實定位`);
@@ -196,6 +227,7 @@ app.post('/api/devices/:id/route', (req, res) => {
   if (!d) return res.status(404).json({ error: '裝置不存在' });
   if (!Array.isArray(waypoints) || waypoints.length < 2) return res.status(400).json({ error: 'waypoints 至少需要 2 個點 [{lat,lng}]' });
   stopRoute(req.params.id);
+  stopJoystick(req.params.id);
   // 預先算每段距離 (公尺, Haversine)
   const R = 6371000, toRad = (x) => x * Math.PI / 180;
   const dist = (a, b) => { const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng); const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(h)); };
@@ -218,6 +250,29 @@ app.post('/api/devices/:id/route/resume', (req, res) => {
   io.emit('route:resume', { deviceId: req.params.id }); res.json({ ok: true, paused: false });
 });
 app.post('/api/devices/:id/route/stop', (req, res) => { if (stopRoute(req.params.id)) io.emit('route:stop', { deviceId: req.params.id }); res.json({ ok: true }); });
+
+// 虛擬搖桿: 中控台搖桿推著走, 放開就停。dx 向東、dy 向北 (-1..1), 幅度決定速度比例。
+// 開始搖桿會先停掉路線 (跟瞬移一樣, 不然路線每秒推播會把裝置拉回去)。
+app.post('/api/devices/:id/joystick', (req, res) => {
+  const { dx, dy, speedKmh = 6 } = req.body || {};
+  const d = devices.get(req.params.id);
+  if (!d) return res.status(404).json({ error: '裝置不存在' });
+  if (typeof dx !== 'number' || typeof dy !== 'number') return res.status(400).json({ error: '需要數字 dx / dy (-1..1, dx 向東, dy 向北)' });
+  if (!d.location) return res.status(400).json({ error: '裝置還沒有位置, 先瞬移設定一個起點' });
+  const mag = Math.min(1, Math.hypot(dx, dy));
+  if (mag < 0.15) { stopJoystick(req.params.id); return res.json({ ok: true, stopped: true }); }
+  if (stopRoute(req.params.id)) io.emit('route:stop', { deviceId: req.params.id });
+  stopJoystick(req.params.id);
+  d.joystick = { dx: dx / mag, dy: dy / mag, magnitude: mag, speedKmh };
+  startJoystickTimer(d);
+  io.emit('joystick:start', { deviceId: req.params.id });
+  res.json({ ok: true, joystick: true });
+});
+app.post('/api/devices/:id/joystick/stop', (req, res) => {
+  if (!devices.has(req.params.id)) return res.status(404).json({ error: '裝置不存在' });
+  if (stopJoystick(req.params.id)) io.emit('joystick:stop', { deviceId: req.params.id });
+  res.json({ ok: true });
+});
 
 app.get('/api/bookmarks', (req, res) => res.json(bookmarks));
 app.post('/api/bookmarks', (req, res) => {
@@ -244,7 +299,7 @@ io.on('connection', (socket) => {
     if (deviceId && typeof lat === 'number' && typeof lng === 'number') setLocation(deviceId, { lat, lng, accuracy });
   });
   socket.on('location:clear', ({ deviceId }) => {
-    const d = devices.get(deviceId); if (d) { stopRoute(deviceId); d.location = null; io.emit('location:clear', { deviceId }); }
+    const d = devices.get(deviceId); if (d) { stopRoute(deviceId); stopJoystick(deviceId); d.location = null; io.emit('location:clear', { deviceId }); }
   });
   socket.on('disconnect', () => {
     const id = socket.data.deviceId;
