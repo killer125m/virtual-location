@@ -68,6 +68,7 @@ label{font-size:12px;color:#94a3b8}
     <h2>4 · 虛擬搖桿</h2>
     <p class="hint">按住搖桿往方向推，頭像就往那走；放開就停。速度跟上面拉桿一樣。搖桿會先停掉路線，電腦滑鼠拖、手機手指拖都可以。</p>
     <div id="stick"><div id="knob"></div></div>
+    <p class="hint" id="stickSpeed" style="text-align:center">搖桿速度：0 km/h（推到底 = 上面拉桿的速度）</p>
   </section>
 
   <div id="map"></div>
@@ -195,6 +196,8 @@ function stickMove(e){
   stickVec = {dx, dy};
   $('knob').style.left = (42 + dx*42) + 'px';
   $('knob').style.top = (42 - dy*42) + 'px';
+  // 搖桿速度 = 拉桿速度 × 推桿幅度, 即時顯示, 推到底就是拉桿的速度
+  $('stickSpeed').textContent = `搖桿速度：${(+$('speed').value * mag).toFixed(1)} km/h（推到底 ${$('speed').value} km/h）`;
   if (Date.now() - lastStickSend < 150) return;
   lastStickSend = Date.now();
   sendJoystick();
@@ -208,6 +211,7 @@ async function stickEnd(){
   if(!stickActive) return;
   stickActive = false; stickVec = {dx:0, dy:0};
   $('knob').style.left = '42px'; $('knob').style.top = '42px';
+  $('stickSpeed').textContent = '搖桿速度：0 km/h（推到底 = 上面拉桿的速度）';
   for(const id of selected){ await fetch(`/api/devices/${id}/joystick/stop`,{method:'POST'}); }
   log('搖桿放開，已停在原地');
 }
