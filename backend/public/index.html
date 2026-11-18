@@ -16,6 +16,7 @@ main{display:grid;grid-template-columns:340px 1fr 300px;gap:12px;padding:12px;he
 .card h2{font-size:14px;margin:0 0 10px;color:#7dd3fc}
 input,select,button{width:100%;padding:9px 10px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;font-size:14px;margin-bottom:8px}
 button{background:#0284c7;border:none;cursor:pointer;font-weight:700} button:hover{background:#0369a1}
+button.paused{background:#16a34a} button.paused:hover{background:#15803d}
 button.ghost{background:#334155} button.danger{background:#b91c1c} button.small{width:auto;padding:6px 10px;font-size:12px;margin:0 4px 4px 0}
 #map{height:100%;min-height:400px;border-radius:12px;z-index:1}
 .device{border:1px solid #334155;border-radius:10px;padding:10px;margin-bottom:8px;cursor:pointer}
@@ -156,7 +157,7 @@ function renderWaypoints(){
   if(waypoints.length>1) routeLine=L.polyline(waypoints.map(w=>[w.lat,w.lng]),{color:'#38bdf8'}).addTo(map);
 }
 function setSpeed(v){ $('speed').value=v; $('speedLabel').textContent=v; }
-function setPauseBtn(){ $('pauseBtn').textContent = routePaused ? '▶ 繼續' : '⏸ 暫停'; }
+function setPauseBtn(){ const b=$('pauseBtn'); b.textContent = routePaused ? '▶ 繼續' : '⏸ 暫停'; b.classList.toggle('paused', routePaused); }
 async function togglePause(){
   // 暫停只凍結位置、不清路線; 繼續從同一點接著走, 不會跳回起點。
   const url = routePaused ? 'route/resume' : 'route/pause';
