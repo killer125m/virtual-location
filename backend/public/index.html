@@ -53,11 +53,13 @@ label{font-size:12px;color:#94a3b8}
     <div class="row"><input id="bmName" placeholder="書籤名稱"><button class="ghost" onclick="addBookmark()">＋ 加入書籤</button></div>
 
     <h2>3 · 路線模擬</h2>
-    <p class="hint">點「＋ 加入途經點」把目前座標加入路線，至少 2 點才能播放。後端每秒插值推播，Android / iOS / 網頁端會同步移動。</p>
+    <p class="hint">點「＋ 加入途經點」把目前座標加入路線，至少 2 點才能播放。後端每秒插值推播，Android / iOS / 網頁端會同步移動。玩走路遊戲（皮克敏）要用散步速度：超過約 16-20 km/h 遊戲會停止種花；開「循環播放」讓它一直走，路線畫成繞一圈回到起點附近最順。</p>
     <div id="waypoints" class="meta">尚無途經點</div>
     <div class="row"><button class="ghost" onclick="addWaypoint()">＋ 加入途經點</button><button class="ghost" onclick="clearWaypoints()">🗑 清除路線</button></div>
-    <label>速度 <span id="speedLabel">30</span> km/h</label>
-    <input type="range" min="5" max="80" value="30" oninput="document.getElementById('speedLabel').textContent=this.value" id="speed">
+    <label>速度 <span id="speedLabel">5</span> km/h</label>
+    <input type="range" min="1" max="80" value="5" oninput="document.getElementById('speedLabel').textContent=this.value" id="speed">
+    <div class="row"><button class="ghost" onclick="setSpeed(4)">🚶 散步 4</button><button class="ghost" onclick="setSpeed(6)">🏃 快走 6</button><button class="ghost" onclick="setSpeed(12)">🚲 慢騎 12</button></div>
+    <label><input type="checkbox" id="loop" style="width:auto"> 🔁 循環播放（走完重頭再走）</label>
     <div class="row"><button onclick="playRoute()">▶ 播放路線</button><button class="danger" onclick="stopRoute()">■ 停止</button></div>
   </section>
 
@@ -151,11 +153,13 @@ function renderWaypoints(){
   if(routeLine) map.removeLayer(routeLine);
   if(waypoints.length>1) routeLine=L.polyline(waypoints.map(w=>[w.lat,w.lng]),{color:'#38bdf8'}).addTo(map);
 }
+function setSpeed(v){ $('speed').value=v; $('speedLabel').textContent=v; }
 async function playRoute(){
   if(waypoints.length<2){ alert('至少需要 2 個途經點'); return; }
   const speed=+ $('speed').value;
-  for(const id of selected){ await fetch(`/api/devices/${id}/route`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({waypoints,speedKmh:speed})}); }
-  log(`路線播放中，${waypoints.length} 點，${speed} km/h`);
+  const loop=$('loop').checked;
+  for(const id of selected){ await fetch(`/api/devices/${id}/route`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({waypoints,speedKmh:speed,loop})}); }
+  log(`路線播放中，${waypoints.length} 點，${speed} km/h${loop?'，循環':''}`);
 }
 async function stopRoute(){ for(const id of selected){ await fetch(`/api/devices/${id}/route/stop`,{method:'POST'}); } log('已停止路線'); }
 async function init(){
