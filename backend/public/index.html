@@ -141,7 +141,11 @@ socket.on('devices:update', d => { devices=d; renderDevices(); });
 socket.on('location:update', ({deviceId, location}) => {
   log(`推播 ${deviceId} -> ${location.lat.toFixed(5)}, ${location.lng.toFixed(5)} (${location.mode||''})`);
   const dev = devices.find(x=>x.id===deviceId); if(dev) dev.location=location; renderDevices();
-  if(selected.has(deviceId)){ marker.setLatLng([location.lat, location.lng]); }
+  if(selected.has(deviceId)){
+    marker.setLatLng([location.lat, location.lng]);
+    // 裝置跑出畫面外就把地圖跟過去, 不然推搖桿也看不到指標在動
+    if (!map.getBounds().contains([location.lat, location.lng])) map.panTo([location.lat, location.lng]);
+  }
 });
 socket.on('location:clear', ({deviceId})=> log(`還原 ${deviceId} 真實定位`));
 socket.on('route:start', ({deviceId})=> { routePaused=false; setPauseBtn(); log(`路線開始 ${deviceId}`); });
@@ -225,7 +229,7 @@ async function playRoute(){
 async function stopRoute(){ for(const id of selected){ await fetch(`/api/devices/${id}/route/stop`,{method:'POST'}); } routePaused=false; setPauseBtn(); log('已停止路線'); }
 
 // 虛擬搖桿: 按住推、放開停。方向每 150ms 送一次後端, 幅度小於 0.15 視為回中不送。
-let stickActive = false, stickVec = {dx:0, dy:0}, lastStickSend = 0;
+let stickActive = false, stickVec = {dx:0, dy:0}, lastStickSend = 0, lastNoSelWarn = 0;
 function stickMove(e){
   const r = $('stick').getBoundingClientRect();
   let dx = (e.clientX - (r.left + r.width/2)) / (r.width/2);
@@ -243,6 +247,10 @@ function stickMove(e){
 }
 function setJoySpeed(v){ $('joySpeed').value = v; $('joySpeedVal').textContent = v; }
 async function sendJoystick(){
+  if (!selected.size) {
+    if (Date.now() - lastNoSelWarn > 3000) { lastNoSelWarn = Date.now(); log('搖桿沒反應：沒有選取裝置，點一下左側裝置把它打勾'); }
+    return;
+  }
   const mag = Math.hypot(stickVec.dx, stickVec.dy);
   if (mag < 0.15) return;
   const speed = +$('joySpeed').value;
