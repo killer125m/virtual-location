@@ -127,7 +127,7 @@ function grabRealLocation(){
 
 const startPos = loadLastPos();
 $('lat').value = startPos.lat; $('lng').value = startPos.lng;
-map = L.map('map').setView([startPos.lat, startPos.lng], 15);
+map = L.map('map', { keyboard: false }).setView([startPos.lat, startPos.lng], 15);
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
 marker = L.marker([startPos.lat, startPos.lng]).addTo(map).bindPopup('目前目標座標').openPopup();
 map.on('click', e => { $('lat').value = e.latlng.lat.toFixed(6); $('lng').value = e.latlng.lng.toFixed(6); moveMarker(); });
@@ -264,6 +264,7 @@ $('stick').addEventListener('pointercancel', stickEnd);
 
 // 方向鍵連動搖桿: 按住 ↑↓←→ 往對應方向走, 同時按兩鍵走斜線, 放開就停。
 // 跟搖桿共用同一組方向與速度 (下面拉桿設的速度); 在輸入框裡按方向鍵時不觸發, 免得搶了輸入框的操作。
+// 用 capture 攔截 + stopPropagation: 地圖本身 (Leaflet) 也會吃方向鍵來捲動地圖, 不攔下來地圖會跟著飛走。
 const arrowKeys = {};
 function arrowVec(){
   let dx = 0, dy = 0;
@@ -289,10 +290,11 @@ window.addEventListener('keydown', e => {
   const tag = (document.activeElement && document.activeElement.tagName) || '';
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
   e.preventDefault();
+  e.stopPropagation();
   if (arrowKeys[e.key]) return; // 按住不放不重複送
   arrowKeys[e.key] = true;
   arrowUpdate();
-});
+}, true);
 window.addEventListener('keyup', e => {
   if (!e.key.startsWith('Arrow')) return;
   delete arrowKeys[e.key];
