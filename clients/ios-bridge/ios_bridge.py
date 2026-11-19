@@ -14,6 +14,8 @@ open until interrupted"), 所以不能用 subprocess.run() 等它跑完,
 每秒重開會讓手機定位在真實/模擬之間一直跳, 遊戲就不同步。
 所以只移動超過 5 公尺才重開模擬, 且換位置時不再等 8 秒確認
 (上一個模擬剛剛還在跑, 環境驗過是好的); 冷啟動才等 8 秒。
+2026-11-20 修假「成功」: 手機沒被看到時直接報失敗不跑 dvt;
+死了的模擬程序不再當成還在跑, grace=0 只給活著的程序。
 
 iOS 17+ 用 dvt 版 (RSD tunnel 會自動建, 不用另外跑 tunneld)。
 iOS 16 以下 dvt 會失敗, 自動改用舊版 `developer simulate-location set`
@@ -257,18 +259,29 @@ _warned_proc = None
 
 def _watch_sim():
     """背景監看模擬程序: 它中途結束 = 定位已還原, 馬上在視窗警告,
-    不然橋接會一直以為定位還在, 手機卻早已跳回真實位置。"""
-    global _warned_proc
+    不然橋接會一直以為定位還在, 手機卻早已跳回真實位置。
+    死了的程序順手清掉, 免得下次寫入把它當成還在跑 (grace=0 就印假成功)。"""
+    global _warned_proc, _sim_proc, _sim_mode
     while True:
         time.sleep(5)
         proc = _sim_proc
         if proc is not None and proc.poll() is not None and proc is not _warned_proc:
             _warned_proc = proc
+            if proc is _sim_proc:
+                _sim_proc, _sim_mode = None, None
             print(f"[橋接] 注意: 模擬程序已結束 (結束碼 {proc.returncode}), iPhone 定位可能已還原, 請到中控台再瞬移一次", flush=True)
 
 
 def set_location(lat, lng):
     global _sim_proc, _sim_mode, _last_applied, _last_restart
+    # 手機根本沒被電腦看到時, 不要去跑 dvt: 它一定失敗, 還會先印假「成功」。
+    # (2026-11-20 凌晨就是這樣: 啟動即報找不到 iPhone, 兩次寫入都印成功,
+    #  dvt 隨即報 Device is not connected、結束碼 1, 定位還原。)
+    # _watch_phone 每 15 秒會自動偵測, 插上線後狀態會自己變回已連上, 不用重開橋接。
+    if not DEVICE_UDID and _phone_state == "missing":
+        print("[橋接] 失敗: 找不到 iPhone, 定位沒寫進去", flush=True)
+        print("[橋接] 請檢查 USB 有沒有接好、手機有沒有解鎖亮屏、跳「信任此電腦」有沒有點信任; 插好後 15 秒內會自動偵測, 不用重開橋接", flush=True)
+        return False
     # 路線播放中每秒推播一次, 但 dvt 模擬重開一次要 1-2 秒才生效:
     # 每秒重開會讓手機定位在真實/模擬之間一直跳, 遊戲就不同步。
     # 所以只動了一點點就不用重開 (模擬還在跑、位置差不多, 遊戲看不出來);
@@ -281,7 +294,9 @@ def set_location(lat, lng):
         if d < 100 and (elapsed < 2 or (d < 5 and elapsed < 10)):
             return True
     print(f"[橋接] 寫入 iPhone: {lat}, {lng}", flush=True)
-    was_running = _sim_proc is not None
+    # 只有模擬程序「還活著」才算跑著: 死了的程序還掛在 _sim_proc 上時,
+    # 絕對不能走 grace=0 (不等確認就印成功), 否則就是 11/19 凌晨第二次寫入的假成功。
+    was_running = _sim_proc is not None and _sim_proc.poll() is None
     _stop_sim()  # 先停掉上一個位置的模擬, 再開新的
     # 路線播放中換位置: 上一個模擬剛剛還在跑 (環境驗過是好的), 不用再等 8 秒確認;
     # 冷啟動 (剛開橋接、剛還原) 才等 8 秒, 確認程序沒崩。
@@ -301,6 +316,8 @@ def set_location(lat, lng):
             proc, err = _start_dvt(lat, lng)
             if proc is not None:
                 _sim_proc, _sim_mode = proc, "dvt"
+                _last_applied = (lat, lng)
+                _last_restart = time.time()
                 print("[橋接] 成功 (Wi-Fi), iPhone 現在就是這個位置", flush=True)
                 return True
     # dvt 不行 (通常是 iOS 16 以下), 改用舊版指令: 跑完就回傳、定位留著
