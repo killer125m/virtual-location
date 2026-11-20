@@ -54,11 +54,9 @@ label{font-size:12px;color:#94a3b8}
     </div>
     <div class="row"><button class="ghost" onclick="grabRealLocation()">📍 抓真實位置</button></div>
     <p class="hint">也可以直接點地圖選點，座標會自動填入。瞬移只會推播給左側打勾的裝置。用手機開中控台按「抓真實位置」，會抓手機 GPS 跳過去。</p>
-
     <h2>2 · 常用地點書籤</h2>
     <div id="bookmarks"></div>
     <div class="row"><input id="bmName" placeholder="書籤名稱"><button class="ghost" onclick="addBookmark()">＋ 加入書籤</button></div>
-
     <h2>3 · 路線模擬</h2>
     <p class="hint">點「＋ 加入途經點」把目前座標加入路線，至少 2 點才能播放。後端每秒插值推播，Android / iOS / 網頁端會同步移動。玩走路遊戲（皮克敏）要用散步速度：超過約 16-20 km/h 遊戲會停止種花；開「循環播放」讓它一直走，路線畫成繞一圈回到起點附近最順。</p>
     <div id="waypoints" class="meta">尚無途經點</div>
@@ -69,7 +67,6 @@ label{font-size:12px;color:#94a3b8}
     <label><input type="checkbox" id="loop" style="width:auto"> 🔁 循環播放（走完重頭再走）</label>
     <div class="row"><button onclick="playRoute()">▶ 播放路線</button><button class="ghost" id="pauseBtn" onclick="togglePause()">⏸ 暫停</button><button class="danger" onclick="stopRoute()">■ 停止</button></div>
   </section>
-
   <div id="mapWrap">
     <div id="map"></div>
     <div id="joyOverlay">
@@ -82,7 +79,6 @@ label{font-size:12px;color:#94a3b8}
       <div class="row"><button class="ghost" onclick="setJoySpeed(4)">🚶 散步 4</button><button class="ghost" onclick="setJoySpeed(6)">🏃 快走 6</button><button class="ghost" onclick="setJoySpeed(12)">🚲 慢騎 12</button></div>
     </div>
   </div>
-
   <section class="card">
     <h2>裝置 <button class="small ghost" onclick="loadDevices()">重新整理</button></h2>
     <div id="devices"></div>
@@ -97,7 +93,16 @@ const socket = io();
 let map, marker, routeLine, selected = new Set(['android-pixel-01','chrome-ext-01','ios-bridge-01']);
 let devices = [], waypoints = [], routePaused = false;
 const $ = id => document.getElementById(id);
-function log(m){ $('log').textContent = new Date().toLocaleTimeString() + '  ' + m + '\n' + $('log').textContent; }
+// 記住上次選的裝置: 開頁自動選回上次那台, 不用每次重打勾真機。
+try { const s = JSON.parse(localStorage.getItem('vl-selected') || 'null'); if (Array.isArray(s) && s.length) selected = new Set(s); } catch(e) {}
+function saveSelected(){ try { localStorage.setItem('vl-selected', JSON.stringify([...selected])); } catch(e) {} }
+function log(m){
+  // Log 只留最近 100 行: 路線跑久了無限長, 頁面會越跑越慢。
+  const el = $('log');
+  el.textContent = new Date().toLocaleTimeString() + '  ' + m + '\n' + el.textContent;
+  const lines = el.textContent.split('\n');
+  if (lines.length > 101) el.textContent = lines.slice(0, 100).join('\n');
+}
 
 // 記住上次的位置: 第一次開頁用興大附近當預設, 之後開頁回到上次停的地方, 不再強制回預設點。
 const DEFAULT_POS = { lat: 24.1235, lng: 120.6753 };
@@ -154,7 +159,6 @@ socket.on('joystick:stop', ({deviceId})=> log(`搖桿停止 ${deviceId}`));
 socket.on('route:pause', ({deviceId})=> { routePaused=true; setPauseBtn(); log(`路線已暫停 ${deviceId}，位置凍結在原地`); });
 socket.on('route:resume', ({deviceId})=> { routePaused=false; setPauseBtn(); log(`路線繼續 ${deviceId}，從同一點接著走`); });
 socket.on('route:stop', ({deviceId})=> { routePaused=false; setPauseBtn(); log(`路線停止 ${deviceId}`); });
-
 async function search(){
   const q=$('q').value.trim(); if(!q) return;
   $('results').innerHTML='搜尋中…';
@@ -173,16 +177,22 @@ async function applyToSelected(){
   log(`瞬移 -> ${lat}, ${lng}，已推播 ${selected.size} 台裝置`);
 }
 async function clearSelected(){ for(const id of selected){ await fetch(`/api/devices/${id}/location/clear`,{method:'POST'}); } log('已還原選取裝置'); }
+function phoneStateText(d){
+  // 橋接在線 ≠ 手機連上: 手機狀態另外顯示, 綠燈才不會騙人。
+  if (!d.phoneState || d.phoneState === 'unknown') return '';
+  if (d.phoneState === 'connected') return '📱 手機：已連上' + (d.phoneTransport ? ' (' + d.phoneTransport + ')' : '');
+  return '📱 手機：未連上';
+}
 function renderDevices(){
   $('devices').innerHTML = devices.length ? devices.map(d=>`
     <div class="device ${selected.has(d.id)?'sel':''}" onclick="toggleDevice('${d.id}')">
       <span style="float:right;cursor:pointer;color:#f87171" onclick="event.stopPropagation();deleteDevice('${d.id}')" title="移除裝置">✕</span>
       <span class="dot ${d.status==='online'?'':'off'}"></span><b>${d.name}</b> <span class="meta">${d.type} · ${d.status}</span>
-      <div class="meta">${d.location?`📍 ${d.location.lat.toFixed(5)}, ${d.location.lng.toFixed(5)} · ${d.location.mode||''}`:'尚未設定定位'}<br>id: ${d.id}</div>
+      <div class="meta">${phoneStateText(d) ? phoneStateText(d) + '<br>' : ''}${d.location?`📍 ${d.location.lat.toFixed(5)}, ${d.location.lng.toFixed(5)} · ${d.location.mode||''}`:'尚未設定定位'}<br>id: ${d.id}</div>
     </div>`).join('') : '<p class="hint">尚無裝置，點下方模擬新增，或讓真實客戶端連線。</p>';
 }
-function toggleDevice(id){ selected.has(id)?selected.delete(id):selected.add(id); renderDevices(); }
-async function deleteDevice(id){ if(!confirm('確定要移除這台裝置嗎？真機重連後會再出現。')) return; selected.delete(id); await fetch('/api/devices/'+encodeURIComponent(id),{method:'DELETE'}); loadDevices(); }
+function toggleDevice(id){ selected.has(id)?selected.delete(id):selected.add(id); saveSelected(); renderDevices(); }
+async function deleteDevice(id){ if(!confirm('確定要移除這台裝置嗎？真機重連後會再出現。')) return; selected.delete(id); saveSelected(); await fetch('/api/devices/'+encodeURIComponent(id),{method:'DELETE'}); loadDevices(); }
 async function loadDevices(){ const r=await fetch('/api/devices'); devices=await r.json(); renderDevices(); }
 async function addSimDevice(){
   const types=[['android','Android 手機'],['web','Chrome 擴充'],['ios-bridge','iOS 橋接']];
@@ -227,7 +237,6 @@ async function playRoute(){
   log(`路線播放中，${waypoints.length} 點，${speed} km/h${loop?'，循環':''}`);
 }
 async function stopRoute(){ for(const id of selected){ await fetch(`/api/devices/${id}/route/stop`,{method:'POST'}); } routePaused=false; setPauseBtn(); log('已停止路線'); }
-
 // 虛擬搖桿: 按住推、放開停。方向每 150ms 送一次後端, 幅度小於 0.15 視為回中不送。
 let stickActive = false, stickVec = {dx:0, dy:0}, lastStickSend = 0, lastNoSelWarn = 0;
 function stickMove(e){
@@ -269,7 +278,6 @@ $('stick').addEventListener('pointerdown', e => { stickActive = true; $('stick')
 $('stick').addEventListener('pointermove', e => { if(stickActive) stickMove(e); });
 $('stick').addEventListener('pointerup', stickEnd);
 $('stick').addEventListener('pointercancel', stickEnd);
-
 // 方向鍵連動搖桿: 按住 ↑↓←→ 往對應方向走, 同時按兩鍵走斜線, 放開就停。
 // 跟搖桿共用同一組方向與速度 (下面拉桿設的速度); 在輸入框裡按方向鍵時不觸發, 免得搶了輸入框的操作。
 // 用 capture 攔截 + stopPropagation: 地圖本身 (Leaflet) 也會吃方向鍵來捲動地圖, 不攔下來地圖會跟著飛走。
@@ -310,9 +318,13 @@ window.addEventListener('keyup', e => {
 });
 async function init(){
   const h=await (await fetch('/health')).json(); $('geoStatus').textContent='Geocoder: '+h.geocoder;
-  // 預設三台模擬裝置，演示用
-  for(const [id,type,name] of [['android-pixel-01','android','Pixel 8 · Android'],['chrome-ext-01','web','Chrome 擴充功能'],['ios-bridge-01','ios-bridge','iPhone 橋接 · Mac mini']]){
-    await fetch('/api/devices',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,type,name})}).catch(()=>{});
+  // 預設三台模擬裝置只在清單空的時候註冊一次: 以前每次開頁都重送, 刪掉的假裝置
+  // (例如 ios-bridge-01) 會一直復活, 還會被誤認成真機在線。
+  const existing = await (await fetch('/api/devices')).json().catch(()=>[]);
+  if (!existing.length) {
+    for(const [id,type,name] of [['android-pixel-01','android','Pixel 8 · Android'],['chrome-ext-01','web','Chrome 擴充功能'],['ios-bridge-01','ios-bridge','iPhone 橋接 · Mac mini']]){
+      await fetch('/api/devices',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,type,name})}).catch(()=>{});
+    }
   }
   await loadDevices(); await loadBookmarks();
 }
