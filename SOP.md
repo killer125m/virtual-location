@@ -39,7 +39,7 @@
 
 ### 第一次設定 (只做一次)
 
-1. 電腦裝 iTunes (Apple 官網版, 裝驅動用)。
+1. 電腦裝 iTunes (Apple 官網版, 裝驅動用, 下載: https://support.apple.com/en-us/docs/software/pl296, 選 iTunes 12.10.11 for Windows 64 bit。不要裝 Microsoft Store 的 Apple Devices, 那版連 Wi-Fi 都找不到手機)。
 2. 下載橋接 .exe: GitHub Repo > Releases > Latest build > 下載 `ios-bridge.exe`、`pymobiledevice3.exe`、`README.txt` (三個放同一個資料夾)。
    (舊方法: 裝 Python 3.11+ 勾 Add to PATH, 進 `clients/ios-bridge/` 跑 `install.bat`。)
 3. iPhone 用 USB 接電腦, 點「信任此電腦」。
@@ -58,7 +58,7 @@
 **設定裡找不到「開發者模式」怎麼辦:**
 Apple 預設把它藏起來, 要先讓 iPhone 跟電腦配對過才會出現:
 1. 電腦裝好 iTunes, USB 接上 iPhone, 點「信任此電腦」, 再回去看設定, 通常就出現了。
-2. 還沒有: 裝 3uTools (免費, 官網 3u.com), 接上手機, 開關就會跑出來。
+2. 還沒有: 裝 3uTools (免費, 官網 https://www.3u.com/), 接上手機, 開關就會跑出來。
 
 注意: 開一次就好, 不會自己關掉; 不是越獄, 也不會清資料; 每支 iPhone 都要各開一次。
 橋接要用 DVT 模擬定位, 沒開開發者模式就連不上。
