@@ -12,8 +12,8 @@ open until interrupted"), 所以不能用 subprocess.run() 等它跑完,
 要還原就砍掉它 (再補一次 clear)。
 路線播放時後端每秒推播一次, 但 dvt 模擬重開一次要 1-2 秒才生效,
 每秒重開會讓手機定位在真實/模擬之間一直跳, 遊戲就不同步。
-所以只移動超過 5 公尺才重開模擬, 且換位置時不再等 8 秒確認
-(上一個模擬剛剛還在跑, 環境驗過是好的); 冷啟動才等 8 秒。
+所以只移動超過 5 公尺才重開模擬, 且換位置時不再等 3 秒確認
+(上一個模擬剛剛還在跑, 環境驗過是好的); 冷啟動才等 3 秒。
 2026-11-20 修假「成功」: 手機沒被看到時直接報失敗不跑 dvt;
 死了的模擬程序不再當成還在跑, grace=0 只給活著的程序。
 同日修偵測: UDID 有兩種格式, 舊款 40 碼十六進位, 新款 (iPhone 12 之後)
@@ -111,7 +111,8 @@ def _find_phone():
                 return m[0], transport
     # Wi-Fi 經 Bonjour (iOS 17+ RSD/RemotePairing): `remote browse` 回傳
     # {"usb": [{"UniqueDeviceID": ...}], "wifi": [{"identifier": UDID, ...}]}。
-    _, out = run(_pmd3_cmd() + ["remote", "browse", "--timeout", "5"], timeout=30)
+    # timeout 只設 2 秒: 找得到通常立刻回, 找不到等 5 秒也一樣沒有, 還拖慢每次寫入。
+    _, out = run(_pmd3_cmd() + ["remote", "browse", "--timeout", "2"], timeout=30)
     if out:
         try:
             data = json.loads(out)
@@ -131,7 +132,7 @@ def _find_phone():
         if m:
             return m[0], "Wi-Fi"
     # Wi-Fi 經 lockdown (mobdev2): 回傳 short_info 陣列, 內含 UniqueDeviceID。
-    _, out = run(_pmd3_cmd() + ["bonjour", "mobdev2", "--timeout", "5"], timeout=30)
+    _, out = run(_pmd3_cmd() + ["bonjour", "mobdev2", "--timeout", "2"], timeout=30)
     if out:
         m = _UDID_RE.findall(out)
         if m:
@@ -187,16 +188,28 @@ def run(cmd, timeout=60):
 _id_resolved = False
 _phone_state = "unknown"  # 'connected' / 'missing' / 'unknown'
 _phone_udid = ""
+_phone_transport = ""  # 'USB' / 'Wi-Fi', 供中控台分開顯示手機連線狀態
 _sio = None  # serve() 裡的 Socket.io 客戶端, 給 _watch_phone 重新註冊用
+
+
+def _report_phone_state():
+    """把手機連線狀態回報給後端: 橋接在線 ≠ 手機連上, 中控台要分開顯示,
+    不然綠燈亮著、手機其實沒接, 看起來像連上了 (2026-11-20 幾次都是這樣誤判)。"""
+    if _sio is not None and getattr(_sio, "connected", False):
+        try:
+            _sio.emit("phone:state", {"deviceId": DEVICE_ID, "phoneState": _phone_state, "transport": _phone_transport, "udid": _phone_udid})
+        except Exception:
+            pass
 
 
 def _apply_phone(udid, transport):
     """套用找到的 iPhone: 記下 UDID, 沒手動設 DEVICE_ID 時用 UDID 前 8 碼當裝置 ID,
     並在視窗印出連線狀態, 這樣才確認得了手機到底有沒有真的連上。"""
-    global DEVICE_ID, DEVICE_NAME, DEVICE_UDID, _phone_udid, _phone_state
+    global DEVICE_ID, DEVICE_NAME, DEVICE_UDID, _phone_udid, _phone_state, _phone_transport
     DEVICE_UDID = udid
     _phone_udid = udid
     _phone_state = "connected"
+    _phone_transport = transport
     if not DEVICE_ID_FROM_ENV:
         # 新款 UDID 前面 00008110 是機型共用前綴, 每支都一樣, 不能當 ID;
         # 取連字號後面那段的前 8 碼。舊款 40 碼維持取前 8 碼。
@@ -204,6 +217,7 @@ def _apply_phone(udid, transport):
         DEVICE_ID = f"ios-{short.lower()}"
         DEVICE_NAME = f"iPhone 橋接 ({short})"
     print(f"[橋接] iPhone 已連上 ({transport}), 裝置 ID: {DEVICE_ID}", flush=True)
+    _report_phone_state()
 
 
 def _delete_device(device_id):
@@ -241,7 +255,9 @@ def _watch_phone():
         else:
             if _phone_state == "connected":
                 _phone_state = "missing"
+                _phone_transport = ""
                 print("[橋接] iPhone 已斷開 (找不到裝置), 請檢查 USB 有沒有鬆、手機有沒有鎖屏、Wi-Fi 是不是同一個", flush=True)
+                _report_phone_state()
 
 
 def _ensure_device_id():
@@ -312,9 +328,13 @@ _last_applied = None  # 上次真正寫入的座標 (lat, lng)
 _last_restart = 0.0   # 上次重開模擬程序的時間
 
 
-def _start_dvt(lat, lng, grace=8):
+def _start_dvt(lat, lng, grace=3):
     """背景啟動 dvt simulate-location set。
     幾秒內就自己結束 = 報錯 (回傳錯誤訊息); 還在跑 = 定位已寫入。
+    grace 預設 3 秒: 隧道通常 1-2 秒就建好, 活著又沒報錯就是成功, 不用等滿 8 秒
+    (舊版每次冷啟動都固定等 8 秒, 路線斷線重接會卡住)。
+    太慢才報錯的失敗 (例如隧道連不到已拔掉的裝置) 3 秒內抓不到, 但 _watch_sim
+    會在 5 秒內警告, 比乾等 8 秒好。
     grace=0 時先等 1 秒再確認 (路線播放中換位置用, 環境剛剛才驗過是好的;
     程序若立刻崩潰, 1 秒內就會死, 就不會印假成功; 多等這 1 秒不影響路線)。
     stdin 用 PIPE (一直開著不關): 模擬開始後 pymobiledevice3 會停在
@@ -395,9 +415,9 @@ def set_location(lat, lng):
     # 絕對不能走 grace=0 (不等確認就印成功), 否則就是 11/19 凌晨第二次寫入的假成功。
     was_running = _sim_proc is not None and _sim_proc.poll() is None
     _stop_sim()  # 先停掉上一個位置的模擬, 再開新的
-    # 路線播放中換位置: 上一個模擬剛剛還在跑 (環境驗過是好的), 不用再等 8 秒確認;
-    # 冷啟動 (剛開橋接、剛還原) 才等 8 秒, 確認程序沒崩。
-    proc, err = _start_dvt(lat, lng, grace=0 if was_running else 8)
+    # 路線播放中換位置: 上一個模擬剛剛還在跑 (環境驗過是好的), 不用再等 3 秒確認;
+    # 冷啟動 (剛開橋接、剛還原) 才等 3 秒, 確認程序沒崩。
+    proc, err = _start_dvt(lat, lng, grace=0 if was_running else 3)
     if proc is not None:
         _sim_proc, _sim_mode = proc, "dvt"
         _last_applied = (lat, lng)
@@ -457,7 +477,8 @@ def serve():
     @sio.event
     def connect():
         print(f"[橋接] 已連上後端 {BACKEND_URL}", flush=True)
-        sio.emit("register", {"id": DEVICE_ID, "type": "ios-bridge", "name": DEVICE_NAME})
+        sio.emit("register", {"id": DEVICE_ID, "type": "ios-bridge", "name": DEVICE_NAME, "phoneState": _phone_state, "transport": _phone_transport})
+        _report_phone_state()
 
     @sio.event
     def disconnect():
