@@ -253,11 +253,15 @@ _last_restart = 0.0   # 上次重開模擬程序的時間
 def _start_dvt(lat, lng, grace=8):
     """背景啟動 dvt simulate-location set。
     幾秒內就自己結束 = 報錯 (回傳錯誤訊息); 還在跑 = 定位已寫入。
-    grace=0 時不等, 直接回傳程序 (路線播放中換位置用, 環境剛剛才驗過是好的;
-    程序若立刻崩潰, _watch_sim 會在幾秒內警告, [dvt] 行也會印出錯誤)。"""
+    grace=0 時先等 1 秒再確認 (路線播放中換位置用, 環境剛剛才驗過是好的;
+    程序若立刻崩潰, 1 秒內就會死, 就不會印假成功; 多等這 1 秒不影響路線)。
+    stdin 用 DEVNULL: pymobiledevice3 報錯後會停在 "Press ENTER to exit>"
+    等人按 Enter, 程序一直活著、橋接就誤判成功 (2026-11-20 10:01/10:08
+    拔線後就是這樣印假成功);  stdin 關掉它讀到 EOF 就直接結束。"""
     try:
         proc = subprocess.Popen(
             (_pmd3_cmd() + ["developer", "dvt", "simulate-location", "set"] + (["--udid", DEVICE_UDID] if DEVICE_UDID else []) + ["--", str(lat), str(lng)]),
+            stdin=subprocess.DEVNULL,  # 失敗時不要停在 Press ENTER to exit> 等人按 Enter
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
         )
     except FileNotFoundError:
@@ -266,6 +270,12 @@ def _start_dvt(lat, lng, grace=8):
         return None, str(e)
     threading.Thread(target=_drain_stream, args=(proc.stderr, "[dvt]"), daemon=True).start()
     if grace <= 0:
+        # 剛啟動就崩的程序 (例如裝置已拔掉, usbmux 找不到 UDID) 1 秒內就會死,
+        # 等一下再確認, 免得印假成功; 路線播放重開一次才多等 1 秒。
+        time.sleep(1.0)
+        if proc.poll() is not None:
+            time.sleep(0.5)  # 等 drain thread 把最後的錯誤行印完
+            return None, f"dvt simulate-location 結束, 結束碼 {proc.returncode} (原因看上面 [dvt] 的行)"
         return proc, None
     try:
         rc = proc.wait(timeout=grace)
