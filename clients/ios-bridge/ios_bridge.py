@@ -21,6 +21,14 @@ open until interrupted"), 所以不能用 subprocess.run() 等它跑完,
 新手機永遠抓不到, 偏偏 iTunes 認得手機 (配對其實通了), 還讓 fail-fast
 gate 誤判成手機沒接。偵測改用 `usbmux list --simple` (只問 usbmuxd
 拿 UDID, 不連 lockdownd 配對), 兩種格式都認, 輸出不管結束碼。
+同日修 Wi-Fi 偵測: `remote` 底下根本沒有 `list` 子命令 (11.57.0 的
+remote 只有 tunneld/browse/rsd-info/start-tunnel/pair...), 舊版
+`remote list` 只會印 "No such command 'list'", Wi-Fi 偵測從來沒成功過,
+拔線就永遠找不回手機。改用 `usbmux list --network --simple`、
+`remote browse` (wifi[].identifier) 與 `bonjour mobdev2` 找 Wi-Fi;
+另修 set_location 的 Wi-Fi 重試是死碼 (拔過 USB 後 DEVICE_UDID 還留著
+舊值, `if not DEVICE_UDID` 永遠不成立), 現改成 dvt 失敗就強制重找一次,
+確認手機還在就再試一次。
 
 iOS 17+ 用 dvt 版 (RSD tunnel 會自動建, 不用另外跑 tunneld)。
 iOS 16 以下 dvt 會失敗, 自動改用舊版 `developer simulate-location set`
@@ -47,6 +55,7 @@ iOS 16 以下 dvt 會失敗, 自動改用舊版 `developer simulate-location set
   DEVICE_NAME  裝置名稱, 預設 iPhone 橋接
 """
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -80,22 +89,53 @@ _UDID_RE = re.compile(r"\b(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{8}-[0-9a-fA-F]{16})\b")
 
 
 def _find_phone():
-    """找 iPhone: 先查 USB (usbmux list), 再查 Wi-Fi (remote list)。
+    """找 iPhone: 先查 USB (usbmux list), 再查 Wi-Fi。
     --simple 只問 usbmuxd 拿 UDID, 不連 lockdownd 配對, 最穩; 舊版
     pymobiledevice3 沒有 --simple 時再退回一般 list。輸出不管結束碼,
     只要印得出 UDID 就算找到 (list 印得出裝置卻回非零結束碼時也不能漏)。
+    Wi-Fi 有三條路: usbmuxd 認得的 Wi-Fi 裝置 (`usbmux list --network
+    --simple`)、Bonjour RSD/RemotePairing (`remote browse` 的 wifi 區,
+    identifier 就是 UDID)、lockdown over Wi-Fi (`bonjour mobdev2`)。
+    注意: 11.57.0 的 remote 底下根本沒有 `list` 這個子命令, 舊版
+    `remote list` 只會印 "No such command 'list'", Wi-Fi 偵測從來沒成功過。
     回傳 (udid, 'USB'/'Wi-Fi') 或 ('', None)。"""
     for args, transport in (
         (["usbmux", "list", "--simple"], "USB"),
         (["usbmux", "list"], "USB"),
-        (["remote", "list", "--simple"], "Wi-Fi"),
-        (["remote", "list"], "Wi-Fi"),
+        (["usbmux", "list", "--network", "--simple"], "Wi-Fi"),
     ):
         _, out = run(_pmd3_cmd() + args, timeout=30)
         if out:
             m = _UDID_RE.findall(out)
             if m:
                 return m[0], transport
+    # Wi-Fi 經 Bonjour (iOS 17+ RSD/RemotePairing): `remote browse` 回傳
+    # {"usb": [{"UniqueDeviceID": ...}], "wifi": [{"identifier": UDID, ...}]}。
+    _, out = run(_pmd3_cmd() + ["remote", "browse", "--timeout", "5"], timeout=30)
+    if out:
+        try:
+            data = json.loads(out)
+        except Exception:
+            data = None
+        if isinstance(data, dict):
+            for section, key, transport in (
+                ("wifi", "identifier", "Wi-Fi"),
+                ("usb", "UniqueDeviceID", "USB"),
+            ):
+                for entry in data.get(section) or []:
+                    if isinstance(entry, dict):
+                        v = entry.get(key) or ""
+                        if _UDID_RE.fullmatch(v):
+                            return v, transport
+        m = _UDID_RE.findall(out)
+        if m:
+            return m[0], "Wi-Fi"
+    # Wi-Fi 經 lockdown (mobdev2): 回傳 short_info 陣列, 內含 UniqueDeviceID。
+    _, out = run(_pmd3_cmd() + ["bonjour", "mobdev2", "--timeout", "5"], timeout=30)
+    if out:
+        m = _UDID_RE.findall(out)
+        if m:
+            return m[0], "Wi-Fi"
     return "", None
 
 
@@ -103,6 +143,28 @@ def _find_remote_udid():
     """(相容舊呼叫) 找 Wi-Fi/USB 上的 iPhone UDID, 或空字串。"""
     udid, _ = _find_phone()
     return udid
+
+
+_last_discovery = 0.0  # 上次 _refresh_phone 真正掃描的時間 (節流用)
+
+
+def _refresh_phone(force=False):
+    """重找一次 iPhone: 找到就 _apply_phone() 並回 True, 找不到回 False。
+    預設 10 秒節流, 路線每秒推播時不會一直掃 Bonjour (remote browse /
+    mobdev2 各要等幾秒); dvt 剛失敗時用 force=True 強制重掃一次。"""
+    global _last_discovery
+    now = time.time()
+    if not force and now - _last_discovery < 10:
+        return _phone_state == "connected"
+    _last_discovery = now
+    try:
+        udid, transport = _find_phone()
+    except Exception:
+        return False
+    if udid:
+        _apply_phone(udid, transport)
+        return True
+    return False
 
 # 正在背景跑的 dvt simulate-location set 程序 (iOS 17+ 用)。定位要一直留著,
 # 這個程序就不能停; 換位置 / 還原時先砍掉它。
@@ -255,13 +317,15 @@ def _start_dvt(lat, lng, grace=8):
     幾秒內就自己結束 = 報錯 (回傳錯誤訊息); 還在跑 = 定位已寫入。
     grace=0 時先等 1 秒再確認 (路線播放中換位置用, 環境剛剛才驗過是好的;
     程序若立刻崩潰, 1 秒內就會死, 就不會印假成功; 多等這 1 秒不影響路線)。
-    stdin 用 DEVNULL: pymobiledevice3 報錯後會停在 "Press ENTER to exit>"
-    等人按 Enter, 程序一直活著、橋接就誤判成功 (2026-11-20 10:01/10:08
-    拔線後就是這樣印假成功);  stdin 關掉它讀到 EOF 就直接結束。"""
+    stdin 用 PIPE (一直開著不關): 模擬開始後 pymobiledevice3 會停在
+    "Press ENTER to exit>" 等人按 Enter 才結束, 定位就是靠這個程序活著
+    才留得住。之前改成 DEVNULL 是錯的: 讀到 EOF 立刻結束, 寫入成功後
+    程序馬上結束碼 0、定位跟著還原 (2026-11-20 11:24 就是這樣)。
+    失敗的程序 (例如裝置已拔掉) 會自己結束碼 1, grace 檢查抓得到, 不靠 stdin。"""
     try:
         proc = subprocess.Popen(
             (_pmd3_cmd() + ["developer", "dvt", "simulate-location", "set"] + (["--udid", DEVICE_UDID] if DEVICE_UDID else []) + ["--", str(lat), str(lng)]),
-            stdin=subprocess.DEVNULL,  # 失敗時不要停在 Press ENTER to exit> 等人按 Enter
+            stdin=subprocess.PIPE,  # 一直開著不關: 模擬靠這個程序活著才留得住, 關掉 (DEVNULL) 會立刻結束、定位還原
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
         )
     except FileNotFoundError:
@@ -305,11 +369,13 @@ def _watch_sim():
 
 def set_location(lat, lng):
     global _sim_proc, _sim_mode, _last_applied, _last_restart
-    # 手機根本沒被電腦看到時, 不要去跑 dvt: 它一定失敗, 還會先印假「成功」。
-    # (2026-11-20 凌晨就是這樣: 啟動即報找不到 iPhone, 兩次寫入都印成功,
-    #  dvt 隨即報 Device is not connected、結束碼 1, 定位還原。)
-    # _watch_phone 每 15 秒會自動偵測, 插上線後狀態會自己變回已連上, 不用重開橋接。
-    if not DEVICE_UDID and _phone_state == "missing":
+    # 手機被標成 missing 時 (例如剛拔 USB), 先重找一次再決定: 可能已改走
+    # Wi-Fi, _watch_phone 的 15 秒巡檢不一定剛跑過。_refresh_phone 有 10 秒
+    # 節流, 路線每秒推播時不會一直掃 Bonjour。重找還找不到才報失敗, 不跑 dvt
+    # (2026-11-20 凌晨就是沒擋好: 啟動即報找不到 iPhone, 兩次寫入都印成功,
+    #  dvt 隨即報 Device is not connected、結束碼 1, 定位還原)。
+    # 舊版只在 DEVICE_UDID 是空的才擋, 拔過 USB 後 UDID 還留著舊值, 擋不住。
+    if _phone_state == "missing" and not _refresh_phone():
         print("[橋接] 失敗: 找不到 iPhone, 定位沒寫進去", flush=True)
         print("[橋接] 請檢查 USB 有沒有接好、手機有沒有解鎖亮屏、跳「信任此電腦」有沒有點信任; 插好後 15 秒內會自動偵測, 不用重開橋接", flush=True)
         return False
@@ -338,19 +404,19 @@ def set_location(lat, lng):
         _last_restart = time.time()
         print("[橋接] 成功, iPhone 現在就是這個位置 (模擬程序在背景跑著, 不要關這個視窗)", flush=True)
         return True
-    # USB 沒找到, 試 Wi-Fi: 第一次 USB 配對後, 同 Wi-Fi 下 remote list 找得到 UDID
-    if not DEVICE_UDID:
-        remote = _find_remote_udid()
-        if remote:
-            print(f"[橋接] USB 沒找到, 改試 Wi-Fi 上的 iPhone ({remote[:8]}...)", flush=True)
-            globals()["DEVICE_UDID"] = remote
-            proc, err = _start_dvt(lat, lng)
-            if proc is not None:
-                _sim_proc, _sim_mode = proc, "dvt"
-                _last_applied = (lat, lng)
-                _last_restart = time.time()
-                print("[橋接] 成功 (Wi-Fi), iPhone 現在就是這個位置", flush=True)
-                return True
+    # dvt 不行: 可能手機剛從 USB 換到 Wi-Fi (UDID 沒變, 但走的通道變了)。
+    # 強制重找一次確認手機還在, 在就用同一支 UDID 再試一次 dvt (dvt 會自己
+    # 走 tunnel fallback); 找不到就不重試, 直接進舊版/失敗流程。
+    # 舊版這裡只在 DEVICE_UDID 是空的才重找, 拔過 USB 後 UDID 還留著舊值,
+    # 這段永遠跑不到, Wi-Fi 重試是死碼。
+    if _refresh_phone(force=True):
+        proc, err = _start_dvt(lat, lng)
+        if proc is not None:
+            _sim_proc, _sim_mode = proc, "dvt"
+            _last_applied = (lat, lng)
+            _last_restart = time.time()
+            print("[橋接] 成功, iPhone 現在就是這個位置 (模擬程序在背景跑著, 不要關這個視窗)", flush=True)
+            return True
     # dvt 不行 (通常是 iOS 16 以下), 改用舊版指令: 跑完就回傳、定位留著
     print(f"[橋接] dvt 模式不行 ({err}), 改試 iOS 16 以下用的舊版指令...", flush=True)
     ok, out = run(_pmd3_cmd() + ["developer", "simulate-location", "set"] + (["--udid", DEVICE_UDID] if DEVICE_UDID else []) + ["--", str(lat), str(lng)], timeout=60)
