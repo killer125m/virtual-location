@@ -43,7 +43,7 @@ function logEvent(type, message, data) {
   return e;
 }
 function publicDevice(d) {
-  return { id: d.id, type: d.type, name: d.name, status: d.status, location: d.location || null, lastSeen: d.lastSeen };
+  return { id: d.id, type: d.type, name: d.name, status: d.status, location: d.location || null, lastSeen: d.lastSeen, phoneState: d.phoneState || 'unknown', phoneTransport: d.phoneTransport || '' };
 }
 function broadcastDevices() { io.emit('devices:update', [...devices.values()].map(publicDevice)); }
 function setLocation(deviceId, loc, mode = 'teleport') {
@@ -124,6 +124,24 @@ function resumeRoute(deviceId) {
 }
 
 // ---- 地理編碼 ----
+const geoCache = new Map(); // 查過的地址先記起來, 1 小時內重查直接回, 不用再打 Nominatim
+function geoCacheGet(key) {
+  const e = geoCache.get(key);
+  if (!e) return null;
+  if (Date.now() - e.ts > 3600_000) { geoCache.delete(key); return null; }
+  return e.results;
+}
+function geoCacheSet(key, results) {
+  if (geoCache.size > 200) geoCache.delete(geoCache.keys().next().value);
+  geoCache.set(key, { ts: Date.now(), results });
+}
+async function fetchTimeout(url, options = {}, ms = 8000) {
+  // 沒逾時的 fetch 會一直卡住: Nominatim 一慢, 整個搜尋就吊在那裡。
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), ms);
+  try { return await fetch(url, { ...options, signal: c.signal }); }
+  finally { clearTimeout(t); }
+}
 async function geocodeNominatim(q) {
   // Nominatim 對中文門牌號解析較弱 (例: 興大路145號常回空), 依序退化查詢:
   // 完整地址 -> 去掉門牌號 -> 只留路名, 並標註 fallback, 讓使用者確認
@@ -134,7 +152,7 @@ async function geocodeNominatim(q) {
   if (roadOnly && !variants.includes(roadOnly[1])) variants.push(roadOnly[1]);
   for (const v of variants) {
     const url = `https://nominatim.openstreetmap.org/search?format=json&limit=5&addressdetails=1&accept-language=zh-TW&countrycodes=tw&q=${encodeURIComponent(v)}`;
-    const r = await fetch(url, { headers: { 'User-Agent': 'virtual-location-prototype/0.1 (contact: local-dev)' } });
+    const r = await fetchTimeout(url, { headers: { 'User-Agent': 'virtual-location-prototype/0.1 (contact: local-dev)' } });
     if (!r.ok) throw new Error(`Nominatim ${r.status}`);
     const j = await r.json();
     if (j.length) return j.map((x) => ({
@@ -147,7 +165,7 @@ async function geocodeNominatim(q) {
 }
 async function geocodeGoogle(q) {
   const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(q)}&language=zh-TW&region=tw&key=${GOOGLE_API_KEY}`;
-  const r = await fetch(url);
+  const r = await fetchTimeout(url);
   const j = await r.json();
   if (j.status !== 'OK') throw new Error(`Google Geocoding: ${j.status} ${j.error_message || ''}`);
   return j.results.map((x) => ({
@@ -164,7 +182,11 @@ app.get('/api/geocode', async (req, res) => {
   if (!q) return res.status(400).json({ error: '缺少 q 參數, 例: /api/geocode?q=台中市南區興大路145號' });
   try {
     const provider = req.query.provider || GEOCODER;
+    const cacheKey = `${provider}:${q}`;
+    const cached = geoCacheGet(cacheKey);
+    if (cached) return res.json({ query: q, provider, results: cached, cached: true });
     const results = provider === 'google' ? await geocodeGoogle(q) : await geocodeNominatim(q);
+    if (results.length) geoCacheSet(cacheKey, results);
     if (!results.length) return res.json({ query: q, results: [], note: '找不到結果, 試試更完整的地址或地標' });
     res.json({ query: q, provider, results });
   } catch (e) { res.status(502).json({ error: String(e.message || e) }); }
@@ -183,7 +205,7 @@ app.post('/api/devices', (req, res) => {
     broadcastDevices();
     return res.json(publicDevice(existing));
   }
-  const d = { id, type, name: name || id, status: 'online', socketId: null, location: null, lastSeen: Date.now(), routeTimer: null, joystickTimer: null };
+  const d = { id, type, name: name || id, status: 'online', socketId: null, location: null, lastSeen: Date.now(), routeTimer: null, joystickTimer: null, phoneState: 'unknown', phoneTransport: '' };
   devices.set(id, d); broadcastDevices();
   logEvent('device', `裝置註冊: ${d.name} (${type})`);
   res.status(201).json(publicDevice(d));
@@ -288,12 +310,22 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 io.on('connection', (socket) => {
   socket.emit('devices:update', [...devices.values()].map(publicDevice));
-  socket.on('register', ({ id, type, name }) => {
+  socket.on('register', ({ id, type, name, phoneState, transport }) => {
     if (!id) return;
-    const d = devices.get(id) || { id, type: type || 'unknown', name: name || id, location: null, routeTimer: null };
+    const d = devices.get(id) || { id, type: type || 'unknown', name: name || id, location: null, routeTimer: null, phoneState: 'unknown', phoneTransport: '' };
     d.status = 'online'; d.socketId = socket.id; d.lastSeen = Date.now(); d.type = type || d.type; d.name = name || d.name;
+    if (phoneState) d.phoneState = phoneState;
+    if (transport !== undefined) d.phoneTransport = transport;
     devices.set(id, d); socket.data.deviceId = id; broadcastDevices();
     logEvent('device', `裝置上線: ${d.name} (${d.type})`);
+  });
+  socket.on('phone:state', ({ deviceId, phoneState, transport }) => {
+    // 橋接在線 ≠ 手機連上: 手機狀態另外存, 中控台分開顯示, 綠燈才不會騙人。
+    const d = devices.get(deviceId || socket.data.deviceId);
+    if (!d) return;
+    if (phoneState) d.phoneState = phoneState;
+    if (transport !== undefined) d.phoneTransport = transport;
+    broadcastDevices();
   });
   socket.on('location:update', ({ deviceId, lat, lng, accuracy }) => {
     if (deviceId && typeof lat === 'number' && typeof lng === 'number') setLocation(deviceId, { lat, lng, accuracy });
