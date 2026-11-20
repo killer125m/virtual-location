@@ -16,6 +16,11 @@ open until interrupted"), 所以不能用 subprocess.run() 等它跑完,
 (上一個模擬剛剛還在跑, 環境驗過是好的); 冷啟動才等 8 秒。
 2026-11-20 修假「成功」: 手機沒被看到時直接報失敗不跑 dvt;
 死了的模擬程序不再當成還在跑, grace=0 只給活著的程序。
+同日修偵測: UDID 有兩種格式, 舊款 40 碼十六進位, 新款 (iPhone 12 之後)
+是 8 碼-16 碼 (例 00008110-000C2A3B4D5E6F7A); 舊版正則只認 40 碼,
+新手機永遠抓不到, 偏偏 iTunes 認得手機 (配對其實通了), 還讓 fail-fast
+gate 誤判成手機沒接。偵測改用 `usbmux list --simple` (只問 usbmuxd
+拿 UDID, 不連 lockdownd 配對), 兩種格式都認, 輸出不管結束碼。
 
 iOS 17+ 用 dvt 版 (RSD tunnel 會自動建, 不用另外跑 tunneld)。
 iOS 16 以下 dvt 會失敗, 自動改用舊版 `developer simulate-location set`
@@ -43,6 +48,7 @@ iOS 16 以下 dvt 會失敗, 自動改用舊版 `developer simulate-location set
 """
 import argparse
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -68,14 +74,26 @@ def _pmd3_cmd():
     return ["pymobiledevice3"]
 
 
+# UDID 有兩種格式: 舊款 40 碼十六進位, 新款 (iPhone 12 之後) 是
+# 8 碼-16 碼 (例 00008110-000C2A3B4D5E6F7A)。
+_UDID_RE = re.compile(r"\b(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{8}-[0-9a-fA-F]{16})\b")
+
+
 def _find_phone():
     """找 iPhone: 先查 USB (usbmux list), 再查 Wi-Fi (remote list)。
+    --simple 只問 usbmuxd 拿 UDID, 不連 lockdownd 配對, 最穩; 舊版
+    pymobiledevice3 沒有 --simple 時再退回一般 list。輸出不管結束碼,
+    只要印得出 UDID 就算找到 (list 印得出裝置卻回非零結束碼時也不能漏)。
     回傳 (udid, 'USB'/'Wi-Fi') 或 ('', None)。"""
-    import re
-    for args, transport in ((["usbmux", "list"], "USB"), (["remote", "list"], "Wi-Fi")):
-        ok, out = run(_pmd3_cmd() + args, timeout=30)
-        if ok and out:
-            m = re.findall(r"\b[0-9a-fA-F]{40}\b", out)
+    for args, transport in (
+        (["usbmux", "list", "--simple"], "USB"),
+        (["usbmux", "list"], "USB"),
+        (["remote", "list", "--simple"], "Wi-Fi"),
+        (["remote", "list"], "Wi-Fi"),
+    ):
+        _, out = run(_pmd3_cmd() + args, timeout=30)
+        if out:
+            m = _UDID_RE.findall(out)
             if m:
                 return m[0], transport
     return "", None
@@ -118,8 +136,11 @@ def _apply_phone(udid, transport):
     _phone_udid = udid
     _phone_state = "connected"
     if not DEVICE_ID_FROM_ENV:
-        DEVICE_ID = f"ios-{udid[:8].lower()}"
-        DEVICE_NAME = f"iPhone 橋接 ({udid[:8]})"
+        # 新款 UDID 前面 00008110 是機型共用前綴, 每支都一樣, 不能當 ID;
+        # 取連字號後面那段的前 8 碼。舊款 40 碼維持取前 8 碼。
+        short = udid[9:17] if "-" in udid else udid[:8]
+        DEVICE_ID = f"ios-{short.lower()}"
+        DEVICE_NAME = f"iPhone 橋接 ({short})"
     print(f"[橋接] iPhone 已連上 ({transport}), 裝置 ID: {DEVICE_ID}", flush=True)
 
 
